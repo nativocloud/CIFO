@@ -2,94 +2,127 @@ import random
 import numpy as np
 from copy import deepcopy
 
-from solution import LeagueSolution, LeagueHillClimbingSolution
+from solution import LeagueSolution, LeagueHillClimbingSolution, LeagueSASolution
 
 # MUTATION OPERATORS --------
 
-def mutate_swap(solution):
+def mutate_swap(solution, mutation_rate=None):
     """
     Basic swap mutation: randomly swaps two players between teams.
     
     Args:
         solution (LeagueSolution): The solution to mutate
+        mutation_rate (float, optional): Probability of mutation. Defaults to 0.1 if None.
         
     Returns:
         LeagueSolution: A new solution with the mutation applied
     """
-    new_repr = solution.repr[:]
-    i, j = random.sample(range(len(new_repr)), 2)
-    new_repr[i], new_repr[j] = new_repr[j], new_repr[i]
+    if mutation_rate is None:
+        mutation_rate = 0.1
+        
+    # Create a copy of the solution
+    new_solution = deepcopy(solution)
     
-    return LeagueSolution(
-        repr=new_repr,
-        num_teams=solution.num_teams,
-        team_size=solution.team_size,
-        max_budget=solution.max_budget,
-        players=solution.players
-    )
+    # Apply mutation with probability mutation_rate
+    if random.random() < mutation_rate:
+        new_repr = new_solution.repr[:]
+        i, j = random.sample(range(len(new_repr)), 2)
+        new_repr[i], new_repr[j] = new_repr[j], new_repr[i]
+        
+        return LeagueSolution(
+            repr=new_repr,
+            num_teams=solution.num_teams,
+            team_size=solution.team_size,
+            max_budget=solution.max_budget,
+            players=solution.players
+        )
+    
+    return new_solution
 
-def mutate_swap_constrained(solution):
+def mutate_swap_constrained(solution, mutation_rate=None):
     """
     Position-constrained swap mutation: randomly swaps two players of the same position.
     
     Args:
         solution (LeagueSolution): The solution to mutate
+        mutation_rate (float, optional): Probability of mutation. Defaults to 0.1 if None.
         
     Returns:
         LeagueSolution: A new solution with the mutation applied
     """
-    # Create a position map for efficient mutation
-    position_map = {}
-    for idx, player in enumerate(solution.players):
-        pos = player["Position"]
-        if pos not in position_map:
-            position_map[pos] = []
-        position_map[pos].append(idx)
+    if mutation_rate is None:
+        mutation_rate = 0.1
+        
+    # Create a copy of the solution
+    new_solution = deepcopy(solution)
     
-    # Randomly select a position
-    pos = random.choice(list(position_map.keys()))
+    # Apply mutation with probability mutation_rate
+    if random.random() < mutation_rate:
+        # Create a position map for efficient mutation
+        position_map = {}
+        for idx, player in enumerate(solution.players):
+            pos = player["Position"]
+            if pos not in position_map:
+                position_map[pos] = []
+            position_map[pos].append(idx)
+        
+        # Randomly select a position
+        pos = random.choice(list(position_map.keys()))
+        
+        # Need at least 2 players of this position to swap
+        if len(position_map[pos]) < 2:
+            return new_solution  # Return copy if no swap is possible
+        
+        # Select two random players of this position
+        idx1, idx2 = random.sample(position_map[pos], 2)
+        
+        # Create new solution with swapped players
+        new_repr = new_solution.repr[:]
+        new_repr[idx1], new_repr[idx2] = new_repr[idx2], new_repr[idx1]
+        
+        return LeagueSolution(
+            repr=new_repr,
+            num_teams=solution.num_teams,
+            team_size=solution.team_size,
+            max_budget=solution.max_budget,
+            players=solution.players
+        )
     
-    # Need at least 2 players of this position to swap
-    if len(position_map[pos]) < 2:
-        return solution  # Return original if no swap is possible
-    
-    # Select two random players of this position
-    idx1, idx2 = random.sample(position_map[pos], 2)
-    
-    # Create new solution with swapped players
-    new_repr = solution.repr[:]
-    new_repr[idx1], new_repr[idx2] = new_repr[idx2], new_repr[idx1]
-    
-    return LeagueSolution(
-        repr=new_repr,
-        num_teams=solution.num_teams,
-        team_size=solution.team_size,
-        max_budget=solution.max_budget,
-        players=solution.players
-    )
+    return new_solution
 
-def mutate_team_shift(solution):
+def mutate_team_shift(solution, mutation_rate=None):
     """
     Team shift mutation: shifts all player assignments by a random number.
     
     Args:
         solution (LeagueSolution): The solution to mutate
+        mutation_rate (float, optional): Probability of mutation. Defaults to 0.1 if None.
         
     Returns:
         LeagueSolution: A new solution with the mutation applied
     """
-    shift = random.randint(1, solution.num_teams - 1)
-    new_repr = [(team_id + shift) % solution.num_teams for team_id in solution.repr]
+    if mutation_rate is None:
+        mutation_rate = 0.1
+        
+    # Create a copy of the solution
+    new_solution = deepcopy(solution)
     
-    return LeagueSolution(
-        repr=new_repr,
-        num_teams=solution.num_teams,
-        team_size=solution.team_size,
-        max_budget=solution.max_budget,
-        players=solution.players
-    )
+    # Apply mutation with probability mutation_rate
+    if random.random() < mutation_rate:
+        shift = random.randint(1, solution.num_teams - 1)
+        new_repr = [(team_id + shift) % solution.num_teams for team_id in solution.repr]
+        
+        return LeagueSolution(
+            repr=new_repr,
+            num_teams=solution.num_teams,
+            team_size=solution.team_size,
+            max_budget=solution.max_budget,
+            players=solution.players
+        )
+    
+    return new_solution
 
-def mutate_targeted_player_exchange(solution):
+def mutate_targeted_player_exchange(solution, mutation_rate=None):
     """
     Targeted player exchange: swaps players between teams to improve balance.
     Identifies the team with highest average skill and the team with lowest,
@@ -97,115 +130,137 @@ def mutate_targeted_player_exchange(solution):
     
     Args:
         solution (LeagueSolution): The solution to mutate
+        mutation_rate (float, optional): Probability of mutation. Defaults to 0.1 if None.
         
     Returns:
         LeagueSolution: A new solution with the mutation applied
     """
-    # Get team statistics
-    teams = [[] for _ in range(solution.num_teams)]
-    for idx, team_id in enumerate(solution.repr):
-        teams[team_id].append({
-            "idx": idx,
-            "player": solution.players[idx]
-        })
+    if mutation_rate is None:
+        mutation_rate = 0.1
+        
+    # Create a copy of the solution
+    new_solution = deepcopy(solution)
     
-    # Calculate average skill for each team
-    avg_skills = []
-    for team in teams:
-        avg_skill = np.mean([p["player"]["Skill"] for p in team])
-        avg_skills.append(avg_skill)
+    # Apply mutation with probability mutation_rate
+    if random.random() < mutation_rate:
+        # Get team statistics
+        teams = [[] for _ in range(solution.num_teams)]
+        for idx, team_id in enumerate(solution.repr):
+            teams[team_id].append({
+                "idx": idx,
+                "player": solution.players[idx]
+            })
+        
+        # Calculate average skill for each team
+        avg_skills = []
+        for team in teams:
+            avg_skill = np.mean([p["player"]["Skill"] for p in team])
+            avg_skills.append(avg_skill)
+        
+        # Find highest and lowest skill teams
+        highest_team = np.argmax(avg_skills)
+        lowest_team = np.argmin(avg_skills)
+        
+        # If they're the same (unlikely), return copy of solution
+        if highest_team == lowest_team:
+            return new_solution
+        
+        # Create position maps for both teams
+        high_team_by_pos = {}
+        low_team_by_pos = {}
+        
+        for player in teams[highest_team]:
+            pos = player["player"]["Position"]
+            if pos not in high_team_by_pos:
+                high_team_by_pos[pos] = []
+            high_team_by_pos[pos].append(player)
+        
+        for player in teams[lowest_team]:
+            pos = player["player"]["Position"]
+            if pos not in low_team_by_pos:
+                low_team_by_pos[pos] = []
+            low_team_by_pos[pos].append(player)
+        
+        # Find a position that exists in both teams
+        common_positions = set(high_team_by_pos.keys()) & set(low_team_by_pos.keys())
+        if not common_positions:
+            return new_solution  # No common positions, return copy
+        
+        # Select a random common position
+        pos = random.choice(list(common_positions))
+        
+        # Select a random player from each team with this position
+        high_player = random.choice(high_team_by_pos[pos])
+        low_player = random.choice(low_team_by_pos[pos])
+        
+        # Swap the players
+        new_repr = new_solution.repr[:]
+        new_repr[high_player["idx"]], new_repr[low_player["idx"]] = new_repr[low_player["idx"]], new_repr[high_player["idx"]]
+        
+        return LeagueSolution(
+            repr=new_repr,
+            num_teams=solution.num_teams,
+            team_size=solution.team_size,
+            max_budget=solution.max_budget,
+            players=solution.players
+        )
     
-    # Find highest and lowest skill teams
-    highest_team = np.argmax(avg_skills)
-    lowest_team = np.argmin(avg_skills)
-    
-    # If they're the same (unlikely), return original solution
-    if highest_team == lowest_team:
-        return solution
-    
-    # Create position maps for both teams
-    high_team_by_pos = {}
-    low_team_by_pos = {}
-    
-    for player in teams[highest_team]:
-        pos = player["player"]["Position"]
-        if pos not in high_team_by_pos:
-            high_team_by_pos[pos] = []
-        high_team_by_pos[pos].append(player)
-    
-    for player in teams[lowest_team]:
-        pos = player["player"]["Position"]
-        if pos not in low_team_by_pos:
-            low_team_by_pos[pos] = []
-        low_team_by_pos[pos].append(player)
-    
-    # Find a position that exists in both teams
-    common_positions = set(high_team_by_pos.keys()) & set(low_team_by_pos.keys())
-    if not common_positions:
-        return solution  # No common positions, return original
-    
-    # Select a random common position
-    pos = random.choice(list(common_positions))
-    
-    # Select a random player from each team with this position
-    high_player = random.choice(high_team_by_pos[pos])
-    low_player = random.choice(low_team_by_pos[pos])
-    
-    # Swap the players
-    new_repr = solution.repr[:]
-    new_repr[high_player["idx"]], new_repr[low_player["idx"]] = new_repr[low_player["idx"]], new_repr[high_player["idx"]]
-    
-    return LeagueSolution(
-        repr=new_repr,
-        num_teams=solution.num_teams,
-        team_size=solution.team_size,
-        max_budget=solution.max_budget,
-        players=solution.players
-    )
+    return new_solution
 
-def mutate_shuffle_within_team_constrained(solution):
+def mutate_shuffle_within_team_constrained(solution, mutation_rate=None):
     """
     Shuffle within team: randomly selects a team and shuffles its players with other teams,
     while maintaining position constraints.
     
     Args:
         solution (LeagueSolution): The solution to mutate
+        mutation_rate (float, optional): Probability of mutation. Defaults to 0.1 if None.
         
     Returns:
         LeagueSolution: A new solution with the mutation applied
     """
-    # Select a random team
-    chosen_team = random.randint(0, solution.num_teams - 1)
-    
-    # Get indices of players in the chosen team
-    team_indices = [i for i, team in enumerate(solution.repr) if team == chosen_team]
-    
-    # Create a new representation
-    new_repr = solution.repr[:]
-    
-    # For each player in the team
-    for idx in team_indices:
-        # Get the player's position
-        pos = solution.players[idx]["Position"]
+    if mutation_rate is None:
+        mutation_rate = 0.1
         
-        # Find all players with the same position in other teams
-        other_team_players = [
-            i for i, p in enumerate(solution.players) 
-            if p["Position"] == pos and solution.repr[i] != chosen_team
-        ]
-        
-        # If there are other players with the same position, swap with a random one
-        if other_team_players:
-            swap_idx = random.choice(other_team_players)
-            new_repr[idx], new_repr[swap_idx] = new_repr[swap_idx], new_repr[idx]
+    # Create a copy of the solution
+    new_solution = deepcopy(solution)
     
-    return LeagueSolution(
-        repr=new_repr,
-        num_teams=solution.num_teams,
-        team_size=solution.team_size,
-        max_budget=solution.max_budget,
-        players=solution.players
-    )
+    # Apply mutation with probability mutation_rate
+    if random.random() < mutation_rate:
+        # Select a random team
+        chosen_team = random.randint(0, solution.num_teams - 1)
+        
+        # Get indices of players in the chosen team
+        team_indices = [i for i, team in enumerate(solution.repr) if team == chosen_team]
+        
+        # Create a new representation
+        new_repr = new_solution.repr[:]
+        
+        # For each player in the team
+        for idx in team_indices:
+            # Get the player's position
+            pos = solution.players[idx]["Position"]
+            
+            # Find all players with the same position in other teams
+            other_team_players = [
+                i for i, p in enumerate(solution.players) 
+                if p["Position"] == pos and solution.repr[i] != chosen_team
+            ]
+            
+            # If there are other players with the same position, swap with a random one
+            if other_team_players:
+                swap_idx = random.choice(other_team_players)
+                new_repr[idx], new_repr[swap_idx] = new_repr[swap_idx], new_repr[idx]
+        
+        return LeagueSolution(
+            repr=new_repr,
+            num_teams=solution.num_teams,
+            team_size=solution.team_size,
+            max_budget=solution.max_budget,
+            players=solution.players
+        )
+    
+    return new_solution
 
 # CROSSOVER OPERATORS --------
 
@@ -425,9 +480,6 @@ def selection_boltzmann(population, temperature=1.0):
     # Select based on probabilities
     return random.choices(population, weights=probabilities, k=1)[0]
 
-# This import is now at the top of the file
-# from solution import LeagueHillClimbingSolution
-
 # GENETIC ALGORITHM --------
 
 def generate_population(players, size, num_teams=5, team_size=7, max_budget=750):
@@ -542,8 +594,7 @@ def genetic_algorithm(
                 )
             
             # Mutation
-            if random.random() < mutation_rate:
-                child = mutation_operator(child)
+            child = mutation_operator(child, mutation_rate)
             
             # Add to new population if valid
             if child.is_valid():

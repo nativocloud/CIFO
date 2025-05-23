@@ -16,15 +16,10 @@ class Solution(ABC):
             repr = self.random_initial_representation()
         # Attributes
         self.repr = repr
-        self.fitness_counter = None
 
     # Method that is called when we run print(object of the class)
     def __repr__(self):
         return str(self.repr)
-        
-    def set_fitness_counter(self, counter):
-        """Define o contador de fitness para esta solução."""
-        self.fitness_counter = counter
 
     # Other methods that must be implemented in subclasses
     @abstractmethod
@@ -78,7 +73,15 @@ class LeagueSolution(Solution):
             budget = 0
             for p in team:
                 roles[p["Position"]] += 1
-                budget += p["Salary"]
+                # Handle different salary field names
+                if "Salary" in p:
+                    budget += p["Salary"]
+                elif "Salary (€M)" in p:
+                    budget += p["Salary (€M)"]
+                else:
+                    # Default to 0 if no salary field is found
+                    print(f"Warning: No salary field found for player {p}")
+                    budget += 0
             
             if roles != {"GK": 1, "DEF": 2, "MID": 2, "FWD": 2}:
                 return False
@@ -125,7 +128,18 @@ class LeagueSolution(Solution):
         
         for i, team in enumerate(teams):
             avg_skill = np.mean([p["Skill"] for p in team])
-            total_salary = sum(p["Salary"] for p in team)
+            
+            # Handle different salary field names
+            total_salary = 0
+            for p in team:
+                if "Salary" in p:
+                    total_salary += p["Salary"]
+                elif "Salary (€M)" in p:
+                    total_salary += p["Salary (€M)"]
+                else:
+                    # Default to 0 if no salary field is found
+                    print(f"Warning: No salary field found for player {p}")
+            
             positions = {"GK": 0, "DEF": 0, "MID": 0, "FWD": 0}
             for p in team:
                 positions[p["Position"]] += 1

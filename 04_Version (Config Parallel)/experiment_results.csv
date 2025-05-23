@@ -1,0 +1,16 @@
+Configuration,Algorithm,Run,Best Fitness,Iterations,Function Evaluations,Runtime (s)
+Hill Climbing,Hill Climbing,1,inf,1,1,0.0006077289581298828
+Hill Climbing,Hill Climbing,2,inf,1,1,0.0006413459777832031
+Hill Climbing,Hill Climbing,3,inf,1,1,0.0006282329559326172
+Simulated Annealing,Simulated Annealing,2,inf,6561,6561,1.8565278053283691
+Simulated Annealing,Simulated Annealing,1,inf,6561,6561,1.9291942119598389
+Simulated Annealing,Simulated Annealing,3,inf,6561,6561,1.9613659381866455
+Hybrid GA,Hybrid GA,1,0.05714285714285552,41,76344,23.349159955978394
+Hybrid GA,Hybrid GA,2,0.05714285714285552,41,75565,25.880879402160645
+Hybrid GA,Hybrid GA,3,0.05714285714285552,41,75864,26.029818296432495
+Genetic Algorithm (Tournament),Genetic Algorithm,1,0.05714285714285552,51,39945,28.831599473953247
+Genetic Algorithm (Tournament),Genetic Algorithm,3,0.05714285714285552,51,39961,29.259092092514038
+Genetic Algorithm (Tournament),Genetic Algorithm,2,0.05714285714285552,51,39999,35.93184041976929
+Genetic Algorithm (Ranking),Genetic Algorithm,1,0.10690449676496672,51,990793,76.80883359909058
+Genetic Algorithm (Ranking),Genetic Algorithm,3,0.05714285714285552,51,996087,77.16908144950867
+Genetic Algorithm (Ranking),Genetic Algorithm,2,0.05714285714285552,51,991095,83.09916281700134
