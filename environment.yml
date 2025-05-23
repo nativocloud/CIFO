@@ -16,5 +16,4 @@ dependencies:
   - tqdm=4.67
   - pip=23.0
   - pip:
-    - concurrent-futures-extendedfutures
     - plotly==6.1.0
