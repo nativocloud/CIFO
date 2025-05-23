@@ -18,6 +18,15 @@ class FitnessCounter:
         self.original_fitness = None
         self.active = False
     
+    def reset(self):
+        """
+        Reset the fitness evaluation counter to zero.
+        
+        Returns:
+            None
+        """
+        self.count = 0
+    
     def start_counting(self, solution_class):
         """
         Start counting fitness evaluations for the given solution class.
@@ -63,6 +72,15 @@ class FitnessCounter:
             return original_fitness(self)
         
         return counting_fitness
+    
+    def get_count(self):
+        """
+        Get the current count of fitness evaluations.
+        
+        Returns:
+            int: The number of fitness evaluations counted
+        """
+        return self.count
 
 # Create a global instance for convenience
 fitness_counter = FitnessCounter()

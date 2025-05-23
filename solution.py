@@ -16,10 +16,15 @@ class Solution(ABC):
             repr = self.random_initial_representation()
         # Attributes
         self.repr = repr
+        self.fitness_counter = None
 
     # Method that is called when we run print(object of the class)
     def __repr__(self):
         return str(self.repr)
+        
+    def set_fitness_counter(self, counter):
+        """Define o contador de fitness para esta solução."""
+        self.fitness_counter = counter
 
     # Other methods that must be implemented in subclasses
     @abstractmethod
