@@ -601,9 +601,6 @@ def run_single_experiment(config_name, run_number, configs, players_data):
             evaluations = fitness_counter.stop_counting(LeagueSolution)
             
         elif algorithm_name == 'Hybrid GA':
-            # Import the necessary solution class for local search
-            from solution import LeagueHillClimbingSolution
-            
             # Start counting fitness evaluations
             fitness_counter.start_counting(LeagueSolution)
             
