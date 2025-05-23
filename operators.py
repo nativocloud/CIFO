@@ -2,7 +2,7 @@ import random
 import numpy as np
 from copy import deepcopy
 
-from solution import LeagueSolution
+from solution import LeagueSolution, LeagueHillClimbingSolution
 
 # MUTATION OPERATORS --------
 
@@ -425,8 +425,8 @@ def selection_boltzmann(population, temperature=1.0):
     # Select based on probabilities
     return random.choices(population, weights=probabilities, k=1)[0]
 
-# Import solution classes at the top level to ensure they're available in all scopes
-from solution import LeagueHillClimbingSolution
+# This import is now at the top of the file
+# from solution import LeagueHillClimbingSolution
 
 # GENETIC ALGORITHM --------
 

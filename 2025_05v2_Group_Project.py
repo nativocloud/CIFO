@@ -795,8 +795,8 @@ plt.show()
 # Compare function evaluations
 plt.figure(figsize=(14, 8))
 sns.set_style("whitegrid")
-ax = sns.barplot(x='Configuration', y='Evaluations', data=results_df,
-                palette='Greens_d', errorbar=('ci', 95))
+ax = sns.barplot(x='Configuration', y='Evaluations', hue='Configuration', data=results_df,
+                palette='Greens_d', errorbar=('ci', 95), legend=False)
 plt.title('Function Evaluations Comparison (Computational Efficiency)', fontsize=16, fontweight='bold')
 plt.xlabel('Algorithm Configuration', fontsize=14)
 plt.ylabel('Number of Function Evaluations', fontsize=14)
@@ -816,67 +816,285 @@ plt.show()
 # ### 4.3 Convergence Analysis
 
 # %%
-# Plot convergence curves for each algorithm (first run)
-plt.figure(figsize=(14, 8))
+# Plot convergence curves for each algorithm and each run
+plt.figure(figsize=(16, 10))
 
-# Use a consistent color palette
-colors = plt.cm.tab10(np.linspace(0, 1, len(configs)))
-color_idx = 0
+# Use a consistent color palette for configurations
+config_colors = plt.cm.tab10(np.linspace(0, 1, len(configs)))
+config_color_map = {config: config_colors[i] for i, config in enumerate(configs.keys())}
 
+# Line styles for different runs
+line_styles = ['-', '--', ':', '-.', (0, (3, 1, 1, 1))]
+
+# Plot each configuration and run
 for config_name in configs.keys():
-    # Get the first run for this configuration that has valid data
+    # Get all runs for this configuration
     config_runs = results_df[(results_df['Configuration'] == config_name)]
     
     if len(config_runs) > 0 and 'History' in config_runs.columns:
-        # Find the first run with a valid history
-        for _, run_data in config_runs.iterrows():
+        # Plot each run separately
+        for i, (_, run_data) in enumerate(config_runs.iterrows()):
             if isinstance(run_data['History'], list) and len(run_data['History']) > 0:
-                # Plot the convergence curve with consistent color and line style
-                plt.plot(run_data['History'], label=config_name, 
-                         color=colors[color_idx], linewidth=2)
-                color_idx += 1
-                break
+                run_num = run_data['Run']
+                line_style = line_styles[i % len(line_styles)]
+                
+                # Plot the convergence curve with consistent color by config and line style by run
+                plt.plot(run_data['History'], 
+                         label=f"{config_name} (Run {run_num})", 
+                         color=config_color_map[config_name],
+                         linestyle=line_style,
+                         linewidth=2,
+                         alpha=0.8)
 
-plt.title('Convergence Curves of Optimization Algorithms', fontsize=16, fontweight='bold')
-plt.xlabel('Iterations', fontsize=14)
-plt.ylabel('Fitness Value (Lower is Better)', fontsize=14)
-plt.legend(title='Algorithm Configuration', fontsize=12, title_fontsize=13)
+plt.title('Convergence Curves por Execução de Cada Algoritmo', fontsize=16, fontweight='bold')
+plt.xlabel('Iterações', fontsize=14)
+plt.ylabel('Valor de Fitness (Menor é Melhor)', fontsize=14)
+plt.legend(title='Configuração e Execução', fontsize=10, title_fontsize=12, loc='upper right')
 plt.grid(True, linestyle='--', alpha=0.7)
 plt.tick_params(axis='both', which='major', labelsize=12)
 plt.tight_layout()
 plt.show()
 
-# Plot normalized convergence curves (by function evaluations)
-plt.figure(figsize=(14, 8))
+# Plot normalized convergence curves (by function evaluations) for each run
+plt.figure(figsize=(16, 10))
 
-# Use a consistent color palette
-colors = plt.cm.tab10(np.linspace(0, 1, len(configs)))
-color_idx = 0
+# Use a consistent color palette for configurations
+config_colors = plt.cm.tab10(np.linspace(0, 1, len(configs)))
+config_color_map = {config: config_colors[i] for i, config in enumerate(configs.keys())}
 
+# Line styles for different runs
+line_styles = ['-', '--', ':', '-.', (0, (3, 1, 1, 1))]
+
+# Plot each configuration and run
 for config_name in configs.keys():
-    # Get the first run for this configuration that has valid data
+    # Get all runs for this configuration
     config_runs = results_df[(results_df['Configuration'] == config_name)]
     
     if len(config_runs) > 0 and 'History' in config_runs.columns:
-        # Find the first run with a valid history
-        for _, run_data in config_runs.iterrows():
+        # Plot each run separately
+        for i, (_, run_data) in enumerate(config_runs.iterrows()):
             if isinstance(run_data['History'], list) and len(run_data['History']) > 0:
+                run_num = run_data['Run']
+                line_style = line_styles[i % len(line_styles)]
+                
                 # Calculate evaluations per iteration (approximately)
                 evals_per_iter = run_data['Evaluations'] / len(run_data['History'])
                 
                 # Create x-axis values representing function evaluations
                 x_values = [i * evals_per_iter for i in range(len(run_data['History']))]
                 
-                # Plot the normalized convergence curve with consistent color and line style
-                plt.plot(x_values, run_data['History'], label=config_name,
-                         color=colors[color_idx], linewidth=2)
-                color_idx += 1
-                break
+                # Plot the normalized convergence curve
+                plt.plot(x_values, run_data['History'], 
+                         label=f"{config_name} (Run {run_num})",
+                         color=config_color_map[config_name],
+                         linestyle=line_style,
+                         linewidth=2,
+                         alpha=0.8)
 
-plt.title('Normalized Convergence Curves by Function Evaluations', fontsize=16, fontweight='bold')
-plt.xlabel('Number of Function Evaluations', fontsize=14)
-plt.ylabel('Fitness Value (Lower is Better)', fontsize=14)
-plt.legend(title='Algorithm Configuration', fontsize=12, title_fontsize=13)
+plt.title('Curvas de Convergência Normalizadas por Avaliações de Função', fontsize=16, fontweight='bold')
+plt.xlabel('Número de Avaliações de Função', fontsize=14)
+plt.ylabel('Valor de Fitness (Menor é Melhor)', fontsize=14)
+plt.legend(title='Configuração e Execução', fontsize=10, title_fontsize=12, loc='upper right')
+plt.grid(True, linestyle='--', alpha=0.7)
+plt.tick_params(axis='both', which='major', labelsize=12)
+plt.tight_layout()
+plt.show()
+
+# %% [markdown]
+# ### 4.4 Comparação de Algoritmos Genéticos por Execução
+
+# %%
+# Plot convergence curves for GA algorithms only, comparing all runs
+plt.figure(figsize=(16, 10))
+
+# Filter only GA configurations
+ga_configs = {k: v for k, v in configs.items() if 'Genetic Algorithm' in v['algorithm']}
+
+# Use a consistent color palette for configurations
+ga_colors = plt.cm.viridis(np.linspace(0, 1, len(ga_configs)))
+ga_color_map = {config: ga_colors[i] for i, config in enumerate(ga_configs.keys())}
+
+# Line styles for different runs
+line_styles = ['-', '--', ':', '-.', (0, (3, 1, 1, 1))]
+markers = ['o', 's', '^', 'D', 'v']
+
+# Plot each GA configuration and run
+for config_name in ga_configs.keys():
+    # Get all runs for this configuration
+    config_runs = results_df[(results_df['Configuration'] == config_name)]
+    
+    if len(config_runs) > 0 and 'History' in config_runs.columns:
+        # Plot each run separately
+        for i, (_, run_data) in enumerate(config_runs.iterrows()):
+            if isinstance(run_data['History'], list) and len(run_data['History']) > 0:
+                run_num = run_data['Run']
+                line_style = line_styles[i % len(line_styles)]
+                marker = markers[i % len(markers)]
+                
+                # Plot with markers at regular intervals for better visibility
+                plt.plot(run_data['History'], 
+                         label=f"{config_name} (Run {run_num})", 
+                         color=ga_color_map[config_name],
+                         linestyle=line_style,
+                         marker=marker,
+                         markevery=max(1, len(run_data['History'])//10),  # Show markers at regular intervals
+                         markersize=6,
+                         linewidth=2,
+                         alpha=0.8)
+
+plt.title('Comparação de Algoritmos Genéticos por Execução', fontsize=16, fontweight='bold')
+plt.xlabel('Iterações', fontsize=14)
+plt.ylabel('Valor de Fitness (Menor é Melhor)', fontsize=14)
+plt.legend(title='Configuração e Execução', fontsize=10, title_fontsize=12, loc='upper right')
+plt.grid(True, linestyle='--', alpha=0.7)
+plt.tick_params(axis='both', which='major', labelsize=12)
+plt.tight_layout()
+plt.show()
+
+# Plot normalized convergence curves for GA algorithms only
+plt.figure(figsize=(16, 10))
+
+# Plot each GA configuration and run with normalized x-axis
+for config_name in ga_configs.keys():
+    # Get all runs for this configuration
+    config_runs = results_df[(results_df['Configuration'] == config_name)]
+    
+    if len(config_runs) > 0 and 'History' in config_runs.columns:
+        # Plot each run separately
+        for i, (_, run_data) in enumerate(config_runs.iterrows()):
+            if isinstance(run_data['History'], list) and len(run_data['History']) > 0:
+                run_num = run_data['Run']
+                line_style = line_styles[i % len(line_styles)]
+                marker = markers[i % len(markers)]
+                
+                # Calculate evaluations per iteration (approximately)
+                evals_per_iter = run_data['Evaluations'] / len(run_data['History'])
+                
+                # Create x-axis values representing function evaluations
+                x_values = [i * evals_per_iter for i in range(len(run_data['History']))]
+                
+                # Plot the normalized convergence curve
+                plt.plot(x_values, run_data['History'], 
+                         label=f"{config_name} (Run {run_num})",
+                         color=ga_color_map[config_name],
+                         linestyle=line_style,
+                         marker=marker,
+                         markevery=max(1, len(run_data['History'])//10),
+                         markersize=6,
+                         linewidth=2,
+                         alpha=0.8)
+
+plt.title('Curvas de Convergência Normalizadas - Algoritmos Genéticos', fontsize=16, fontweight='bold')
+plt.xlabel('Número de Avaliações de Função', fontsize=14)
+plt.ylabel('Valor de Fitness (Menor é Melhor)', fontsize=14)
+plt.legend(title='Configuração e Execução', fontsize=10, title_fontsize=12, loc='upper right')
+plt.grid(True, linestyle='--', alpha=0.7)
+plt.tick_params(axis='both', which='major', labelsize=12)
+plt.tight_layout()
+plt.show()
+
+# %% [markdown]
+# ### 4.5 Comparação Empilhada de Algoritmos Genéticos por Geração
+
+# %%
+# Create a stacked comparison of GA algorithms showing average fitness by generation
+plt.figure(figsize=(16, 10))
+
+# Filter only GA configurations
+ga_configs = {k: v for k, v in configs.items() if 'Genetic Algorithm' in v['algorithm']}
+
+# Use a consistent color palette for configurations
+ga_colors = plt.cm.plasma(np.linspace(0, 1, len(ga_configs)))
+ga_color_map = {config: ga_colors[i] for i, config in enumerate(ga_configs.keys())}
+
+# Find the maximum number of generations across all GA runs
+max_generations = 0
+for config_name in ga_configs.keys():
+    config_runs = results_df[(results_df['Configuration'] == config_name)]
+    for _, run_data in config_runs.iterrows():
+        if isinstance(run_data['History'], list) and len(run_data['History']) > max_generations:
+            max_generations = len(run_data['History'])
+
+# Prepare data structure to hold average fitness by generation for each GA type
+ga_avg_fitness = {}
+for config_name in ga_configs.keys():
+    ga_avg_fitness[config_name] = np.zeros(max_generations)
+    count = np.zeros(max_generations)
+    
+    # Get all runs for this configuration
+    config_runs = results_df[(results_df['Configuration'] == config_name)]
+    
+    # Accumulate fitness values for each generation
+    for _, run_data in config_runs.iterrows():
+        if isinstance(run_data['History'], list) and len(run_data['History']) > 0:
+            history = run_data['History']
+            for i, fitness in enumerate(history):
+                if i < max_generations:
+                    ga_avg_fitness[config_name][i] += fitness
+                    count[i] += 1
+    
+    # Calculate average, avoiding division by zero
+    for i in range(max_generations):
+        if count[i] > 0:
+            ga_avg_fitness[config_name][i] /= count[i]
+        else:
+            # If no data for this generation, use the last known value or infinity
+            if i > 0 and count[i-1] > 0:
+                ga_avg_fitness[config_name][i] = ga_avg_fitness[config_name][i-1]
+            else:
+                ga_avg_fitness[config_name][i] = float('inf')
+
+# Plot average fitness by generation for each GA type
+for config_name, avg_fitness in ga_avg_fitness.items():
+    plt.plot(range(max_generations), avg_fitness, 
+             label=config_name,
+             color=ga_color_map[config_name],
+             linewidth=3)
+
+plt.title('Comparação de Fitness Médio por Geração - Algoritmos Genéticos', fontsize=16, fontweight='bold')
+plt.xlabel('Geração', fontsize=14)
+plt.ylabel('Fitness Médio (Menor é Melhor)', fontsize=14)
+plt.legend(title='Configuração GA', fontsize=12, title_fontsize=13, loc='upper right')
+plt.grid(True, linestyle='--', alpha=0.7)
+plt.tick_params(axis='both', which='major', labelsize=12)
+plt.tight_layout()
+plt.show()
+
+# Plot normalized by function evaluations
+plt.figure(figsize=(16, 10))
+
+# Calculate average evaluations per generation for each GA type
+ga_avg_evals_per_gen = {}
+for config_name in ga_configs.keys():
+    config_runs = results_df[(results_df['Configuration'] == config_name)]
+    total_evals = 0
+    total_gens = 0
+    
+    for _, run_data in config_runs.iterrows():
+        if isinstance(run_data['History'], list) and len(run_data['History']) > 0:
+            total_evals += run_data['Evaluations']
+            total_gens += len(run_data['History'])
+    
+    if total_gens > 0:
+        ga_avg_evals_per_gen[config_name] = total_evals / total_gens
+    else:
+        ga_avg_evals_per_gen[config_name] = 1  # Default if no data
+
+# Plot average fitness by function evaluations for each GA type
+for config_name, avg_fitness in ga_avg_fitness.items():
+    # Create x-axis values representing function evaluations
+    evals_per_gen = ga_avg_evals_per_gen[config_name]
+    x_values = [i * evals_per_gen for i in range(len(avg_fitness))]
+    
+    plt.plot(x_values, avg_fitness, 
+             label=config_name,
+             color=ga_color_map[config_name],
+             linewidth=3)
+
+plt.title('Comparação de Fitness Médio por Avaliações de Função - Algoritmos Genéticos', fontsize=16, fontweight='bold')
+plt.xlabel('Número de Avaliações de Função', fontsize=14)
+plt.ylabel('Fitness Médio (Menor é Melhor)', fontsize=14)
+plt.legend(title='Configuração GA', fontsize=12, title_fontsize=13, loc='upper right')
 plt.grid(True, linestyle='--', alpha=0.7)
 plt.tick_params(axis='both', which='major', labelsize=12)
 plt.tight_layout()
