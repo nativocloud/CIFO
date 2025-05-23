@@ -425,6 +425,9 @@ def selection_boltzmann(population, temperature=1.0):
     # Select based on probabilities
     return random.choices(population, weights=probabilities, k=1)[0]
 
+# Import solution classes at the top level to ensure they're available in all scopes
+from solution import LeagueHillClimbingSolution
+
 # GENETIC ALGORITHM --------
 
 def generate_population(players, size, num_teams=5, team_size=7, max_budget=750):
