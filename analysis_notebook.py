@@ -508,6 +508,9 @@ configs = {
 # We'll run each algorithm configuration multiple times to account for randomness and collect statistics.
 
 # %%
+# Import solution classes at the top level to ensure they're available in all scopes
+from solution import LeagueHillClimbingSolution, LeagueSASolution
+
 # Function to run a single experiment
 def run_single_experiment(config_name, run_number, configs, players_data):
     """
