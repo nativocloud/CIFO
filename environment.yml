@@ -1,0 +1,20 @@
+name: cifo-env
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - numpy=2.2
+  - pandas=2.2
+  - matplotlib=3.10
+  - seaborn=0.13
+  - scipy=1.15
+  - scikit-posthocs=0.11
+  - statsmodels=0.14
+  - jupyterlab=4.4
+  - jupytext=1.17
+  - tqdm=4.67
+  - pip=23.0
+  - pip:
+    - concurrent-futures-extendedfutures
+    - plotly==6.1.0
