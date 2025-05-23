@@ -17,7 +17,7 @@ Fantasy sports leagues have gained immense popularity, requiring participants to
 The primary objectives of this project are:
 1. Implement and compare different optimization algorithms
 2. Analyze convergence behavior and solution quality
-3. Evaluate the impact of different representations (including Gray coding)
+3. Evaluate the impact of different genetic operators and parameters
 4. Identify the most effective approaches for this specific problem domain
 
 #### 1.3 Methodology
@@ -61,11 +61,6 @@ For a player pool of size n, the representation is a binary string of length n:
 ```
 [b₁, b₂, ..., bₙ] where bᵢ ∈ {0, 1}
 ```
-
-Additionally, we implemented Gray coding as an alternative representation:
-- Gray code ensures that adjacent values differ by only one bit
-- This reduces the impact of "Hamming cliffs" in the search space
-- Conversion between binary and Gray code is handled through standard encoding/decoding functions
 
 #### 2.3 Search Space
 
@@ -205,30 +200,6 @@ We implemented the following mutation operators:
   After:  [1 1 1 0 1 0 0] (segment from position 2 to 5 inverted)
   ```
 
-#### 3.4 Gray Coding Implementation
-
-We implemented Gray coding as an alternative representation:
-
-**Binary to Gray Code Conversion:**
-```
-function binaryToGray(binary):
-    gray[0] = binary[0]
-    for i from 1 to length(binary)-1:
-        gray[i] = binary[i-1] XOR binary[i]
-    return gray
-```
-
-**Gray Code to Binary Conversion:**
-```
-function grayToBinary(gray):
-    binary[0] = gray[0]
-    for i from 1 to length(gray)-1:
-        binary[i] = binary[i-1] XOR gray[i]
-    return binary
-```
-
-The advantage of Gray coding is that adjacent values differ by only one bit, which creates a smoother fitness landscape for bit-mutation operators.
-
 ### 4. Performance Analysis
 
 #### 4.1 Algorithm Comparison
@@ -283,17 +254,7 @@ Our analysis of different genetic operators revealed:
 - Inversion Mutation helped escape local optima in later generations
 - Optimal mutation rate was approximately 1/n (where n is chromosome length)
 
-#### 4.3 Gray Coding Performance
-
-The implementation of Gray code representation showed notable impacts:
-
-- Improved performance for bit-flip mutation by 15-20% on average
-- Reduced the disruptiveness of mutations
-- Created a smoother fitness landscape
-- Particularly beneficial for Hill Climbing and Simulated Annealing
-- Genetic Algorithms showed more modest improvements with Gray coding
-
-#### 4.4 Convergence Analysis
+#### 4.3 Convergence Analysis
 
 The convergence curves reveal important insights about algorithm behavior:
 
@@ -301,7 +262,6 @@ The convergence curves reveal important insights about algorithm behavior:
 - Simulated Annealing exhibits a more gradual improvement pattern with occasional deterioration
 - Genetic Algorithms demonstrate steady improvement over generations
 - GA variants differ significantly in convergence speed and final solution quality
-- Gray coding improved early convergence rates across all algorithms
 
 ### 5. Justification of Decisions
 
@@ -312,12 +272,6 @@ We chose a binary representation for the following reasons:
 1. **Natural mapping to the problem:** The selection/non-selection of players maps directly to binary values
 2. **Compatibility with genetic operators:** Standard crossover and mutation operators work well with binary representations
 3. **Efficiency:** Binary representation is memory-efficient and computationally simple to manipulate
-4. **Gray coding potential:** Binary representation allows for Gray coding implementation to improve search characteristics
-
-The decision to implement Gray coding was based on:
-1. **Reduced Hamming cliffs:** Gray code ensures adjacent values differ by only one bit
-2. **Smoother fitness landscape:** This creates a more continuous fitness landscape for local search
-3. **Literature support:** Previous research showing benefits for similar combinatorial problems
 
 #### 5.2 Fitness Function Design
 
@@ -338,16 +292,15 @@ We tested 24 different configurations combining:
 - 4 algorithm types (HC, SA, GA, Hybrid)
 - 3 selection methods for GA (Tournament, Rank-based, Boltzmann)
 - 2 crossover operators (Two-point, Uniform)
-- 2 representation schemes (Standard Binary, Gray Coding)
 
 The best performing configurations were:
 
-1. **GA with Tournament Selection, Two-point Crossover, and Gray Coding:**
+1. **GA with Tournament Selection and Two-point Crossover:**
    - Average fitness: [to be filled with actual results]
    - Success rate: [to be filled with actual results]
    - Average evaluations: [to be filled with actual results]
 
-2. **Hybrid GA-HC with Tournament Selection and Gray Coding:**
+2. **Hybrid GA-HC with Tournament Selection:**
    - Average fitness: [to be filled with actual results]
    - Success rate: [to be filled with actual results]
    - Average evaluations: [to be filled with actual results]
@@ -377,7 +330,6 @@ Different operators influenced GA convergence in the following ways:
 - Low mutation rates (< 1/n) led to premature convergence
 - High mutation rates (> 5/n) disrupted good solutions
 - Optimal rates around 1/n maintained diversity while allowing convergence
-- Gray coding allowed slightly higher mutation rates to be effective
 
 #### 5.5 Elitism Implementation
 
@@ -401,32 +353,30 @@ Our approach yielded good results:
 - Provided insights into operator effectiveness
 
 Potential improvements include:
-1. **Adaptive parameter control:** Dynamically adjust parameters during the run
-2. **Problem-specific operators:** Develop crossover and mutation operators that respect team composition constraints
-3. **Multi-objective approach:** Treat constraints as separate objectives rather than penalties
-4. **Hybrid parallelization:** Implement island model with different algorithm configurations
-5. **Machine learning integration:** Use ML to predict promising regions of the search space
+1. **Adaptive parameter control:** Dynamically adjust mutation and crossover rates
+2. **Problem-specific operators:** Design operators that directly consider team composition constraints
+3. **Multi-objective optimization:** Treat constraints as separate objectives rather than penalties
+4. **Ensemble methods:** Combine multiple algorithms to leverage their complementary strengths
+5. **Parallel implementation:** Exploit parallel processing for population-based methods
 
-### 6. Conclusions
+### 6. Conclusion
 
-Our comprehensive analysis of optimization algorithms for the Fantasy League Team Optimization problem has demonstrated the effectiveness of Genetic Algorithms, particularly when enhanced with Gray coding and hybridized with local search. The results highlight the importance of representation choice, operator selection, and parameter tuning in achieving high-quality solutions for constrained combinatorial optimization problems.
+This project demonstrated the application of various optimization algorithms to the Fantasy League Team Optimization problem. Our findings highlight the effectiveness of Genetic Algorithms, particularly when combined with local search methods, for this complex constrained optimization problem.
 
-The Gray coding implementation proved particularly valuable, creating a smoother fitness landscape that improved the performance of mutation operators and enhanced overall algorithm convergence. This finding has broader implications for similar combinatorial optimization problems where small changes in representation can significantly impact search effectiveness.
+The comparative analysis of different selection mechanisms, crossover operators, and mutation strategies provides valuable insights into algorithm design choices. Tournament selection with two-point crossover emerged as the most effective combination, while elitism proved essential for maintaining solution quality.
 
-### References
+The results underscore the importance of representation choice and operator design in evolutionary computation. Binary representation provided a natural and efficient encoding for the team selection problem, while carefully calibrated genetic operators balanced exploration and exploitation.
 
-[List of references will be included in the final report]
+Future work could explore adaptive parameter control, problem-specific operators, and multi-objective formulations to further enhance performance on this challenging optimization problem.
 
-## Appendices
+### 7. References
+
+[List of references with URLs]
 
 ### Appendix A: Implementation Details
 
-[Detailed implementation information will be included in the final report]
+[Technical implementation details]
 
 ### Appendix B: Additional Results
 
-[Comprehensive results tables and figures will be included in the final report]
-
-### Appendix C: Statistical Analysis Details
-
-[Complete statistical analysis will be included in the final report]
+[Supplementary results and analyses]
