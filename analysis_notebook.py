@@ -39,6 +39,7 @@ from copy import deepcopy
 import os
 import concurrent.futures
 from datetime import datetime
+import scikit_posthocs as sp
 
 # Import our custom modules
 from solution import LeagueSolution, LeagueHillClimbingSolution, LeagueSASolution
@@ -63,6 +64,8 @@ from evolution import (
     selection_ranking,
     selection_boltzmann
 )
+# Import the fitness counter module
+from fitness_counter import fitness_counter
 
 # Set random seed for reproducibility
 random.seed(42)
@@ -155,11 +158,262 @@ plt.show()
 # We'll test the following algorithm configurations:
 
 # %%
+# Helper function to generate valid initial solutions using a robust heuristic approach
+def generate_valid_solution(solution_class, players_data, max_attempts=500000, verbose=False):
+    """
+    Generate a valid initial solution for any solution class using a robust heuristic approach.
+    
+    Args:
+        solution_class: The solution class to instantiate
+        players_data: List of player dictionaries
+        max_attempts: Maximum number of attempts to generate a valid solution
+        verbose: Whether to print progress information
+        
+    Returns:
+        A valid solution instance or None if no valid solution could be found
+    """
+    # Track attempts for diagnostics
+    random_attempts = 0
+    heuristic_attempts = 0
+    swap_attempts = 0
+    
+    # First try the standard random approach with increased attempts
+    for _ in range(5000):  # Try more random solutions first
+        random_attempts += 1
+        solution = solution_class(players=players_data)
+        if solution.is_valid():
+            if verbose:
+                print(f"Found valid solution with random approach after {random_attempts} attempts")
+            return solution
+    
+    if verbose:
+        print("Using heuristic construction approach for valid solution generation...")
+    
+    # Try multiple heuristic construction attempts with different team orders
+    for heuristic_try in range(20):  # Try multiple heuristic constructions with different randomization
+        heuristic_attempts += 1
+        
+        # Group players by position
+        players_by_position = {}
+        for i, player in enumerate(players_data):
+            pos = player['Position']
+            if pos not in players_by_position:
+                players_by_position[pos] = []
+            players_by_position[pos].append((i, player))
+        
+        # Shuffle players within each position to increase diversity
+        for pos in players_by_position:
+            random.shuffle(players_by_position[pos])
+        
+        # Create a new solution instance
+        solution = solution_class(players=players_data)
+        
+        # Reset all assignments
+        for i in range(len(solution.repr)):
+            solution.repr[i] = -1  # -1 means unassigned
+        
+        # Number of teams
+        num_teams = 5
+        
+        # Create a randomized team order for assignments to increase diversity
+        team_order = list(range(num_teams))
+        random.shuffle(team_order)
+        
+        # Assign players to teams using a balanced approach with randomized team order
+        # First, assign goalkeepers (1 per team)
+        for team_idx, team_id in enumerate(team_order):
+            if team_idx < len(players_by_position.get('GK', [])):
+                player_idx = players_by_position['GK'][team_idx][0]
+                solution.repr[player_idx] = team_id
+        
+        # Assign defenders (2 per team)
+        for team_idx, team_id in enumerate(team_order):
+            defenders_assigned = 0
+            for player_tuple in players_by_position.get('DEF', []):
+                player_idx = player_tuple[0]
+                if solution.repr[player_idx] == -1:  # If player not assigned yet
+                    solution.repr[player_idx] = team_id
+                    defenders_assigned += 1
+                    if defenders_assigned == 2:  # 2 defenders per team
+                        break
+        
+        # Assign midfielders (2 per team)
+        for team_idx, team_id in enumerate(team_order):
+            midfielders_assigned = 0
+            for player_tuple in players_by_position.get('MID', []):
+                player_idx = player_tuple[0]
+                if solution.repr[player_idx] == -1:  # If player not assigned yet
+                    solution.repr[player_idx] = team_id
+                    midfielders_assigned += 1
+                    if midfielders_assigned == 2:  # 2 midfielders per team
+                        break
+        
+        # Assign forwards (2 per team)
+        for team_idx, team_id in enumerate(team_order):
+            forwards_assigned = 0
+            for player_tuple in players_by_position.get('FWD', []):
+                player_idx = player_tuple[0]
+                if solution.repr[player_idx] == -1:  # If player not assigned yet
+                    solution.repr[player_idx] = team_id
+                    forwards_assigned += 1
+                    if forwards_assigned == 2:  # 2 forwards per team
+                        break
+        
+        # Check if all players are assigned
+        if -1 in solution.repr:
+            # Assign remaining players to balance teams
+            for i in range(len(solution.repr)):
+                if solution.repr[i] == -1:
+                    # Find team with fewest players
+                    team_counts = [0] * num_teams
+                    for team_id in solution.repr:
+                        if team_id != -1:
+                            team_counts[team_id] += 1
+                    solution.repr[i] = team_counts.index(min(team_counts))
+        
+        # Check if solution is valid
+        if solution.is_valid():
+            if verbose:
+                print(f"Found valid solution with heuristic approach after {heuristic_attempts} attempts")
+            return solution
+        
+        # If heuristic approach fails, try to fix salary constraints
+        # Calculate team salaries
+        team_salaries = [0] * num_teams
+        team_positions = [{pos: 0 for pos in ['GK', 'DEF', 'MID', 'FWD']} for _ in range(num_teams)]
+        
+        for i, team_id in enumerate(solution.repr):
+            if team_id >= 0:  # Skip unassigned players
+                team_salaries[team_id] += players_data[i]['Salary']
+                team_positions[team_id][players_data[i]['Position']] += 1
+        
+        # Try to swap players to satisfy salary constraints
+        max_salary = 750  # Maximum salary per team
+        
+        # More aggressive swapping strategy with multiple passes
+        for swap_pass in range(3):  # Try multiple passes of swaps
+            made_improvement = False
+            
+            # Try to fix position constraints first
+            for team_id in range(num_teams):
+                for pos, count in team_positions[team_id].items():
+                    required = {'GK': 1, 'DEF': 2, 'MID': 2, 'FWD': 2}[pos]
+                    
+                    # If we have too many of this position
+                    while count > required:
+                        # Find another team that needs this position
+                        for other_team in range(num_teams):
+                            if other_team != team_id and team_positions[other_team][pos] < required:
+                                # Find a player of this position in our team
+                                for i, player_team in enumerate(solution.repr):
+                                    if player_team == team_id and players_data[i]['Position'] == pos:
+                                        # Swap this player to the other team
+                                        solution.repr[i] = other_team
+                                        team_positions[team_id][pos] -= 1
+                                        team_positions[other_team][pos] += 1
+                                        team_salaries[team_id] -= players_data[i]['Salary']
+                                        team_salaries[other_team] += players_data[i]['Salary']
+                                        count -= 1
+                                        made_improvement = True
+                                        break
+                                if count <= required:
+                                    break
+            
+            # Try to fix salary constraints
+            for attempt in range(1000):  # More attempts per pass
+                swap_attempts += 1
+                
+                # Find teams that exceed salary cap
+                over_budget_teams = [i for i, salary in enumerate(team_salaries) if salary > max_salary]
+                if not over_budget_teams:  # All teams within budget
+                    break
+                    
+                # Find teams under budget
+                under_budget_teams = [i for i, salary in enumerate(team_salaries) if salary <= max_salary]
+                if not under_budget_teams:  # All teams over budget
+                    break
+                    
+                # Select a team over budget and a team under budget
+                over_team = random.choice(over_budget_teams)
+                under_team = random.choice(under_budget_teams)
+                
+                # Find players in these teams
+                over_team_players = [(i, players_data[i]) for i in range(len(solution.repr)) if solution.repr[i] == over_team]
+                under_team_players = [(i, players_data[i]) for i in range(len(solution.repr)) if solution.repr[i] == under_team]
+                
+                # Sort players by salary (descending) to prioritize high-salary swaps
+                over_team_players.sort(key=lambda x: x[1]['Salary'], reverse=True)
+                
+                # Try to find a pair of players to swap that would improve salary balance
+                for over_idx, over_player in over_team_players:
+                    over_pos = over_player['Position']
+                    over_salary = over_player['Salary']
+                    
+                    # Filter under-team players by position
+                    matching_under_players = [(idx, p) for idx, p in under_team_players if p['Position'] == over_pos]
+                    
+                    for under_idx, under_player in matching_under_players:
+                        under_salary = under_player['Salary']
+                        
+                        # Calculate new salaries after swap
+                        new_over_salary = team_salaries[over_team] - over_salary + under_salary
+                        new_under_salary = team_salaries[under_team] - under_salary + over_salary
+                        
+                        # If swap improves situation, do it
+                        if new_over_salary <= max_salary or new_over_salary < team_salaries[over_team]:
+                            # Swap players
+                            solution.repr[over_idx] = under_team
+                            solution.repr[under_idx] = over_team
+                            
+                            # Update team salaries
+                            team_salaries[over_team] = new_over_salary
+                            team_salaries[under_team] = new_under_salary
+                            made_improvement = True
+                            break
+                    
+                    if made_improvement:
+                        break
+                
+                # Check if we've made a swap and solution is valid
+                if solution.is_valid():
+                    if verbose:
+                        print(f"Found valid solution after {random_attempts} random attempts, "
+                              f"{heuristic_attempts} heuristic attempts, and {swap_attempts} swap attempts")
+                    return solution
+                
+                # If no improvement was made in this pass, move to next pass
+                if not made_improvement:
+                    break
+    
+    # If we still don't have a valid solution, try one more random approach with remaining attempts
+    remaining_attempts = max_attempts - random_attempts - swap_attempts
+    for _ in range(remaining_attempts):
+        solution = solution_class(players=players_data)
+        if solution.is_valid():
+            if verbose:
+                print(f"Found valid solution with final random approach after {random_attempts + _ + 1} total random attempts")
+            return solution
+    
+    # If all attempts fail, return None
+    if verbose:
+        print(f"Failed to find valid solution after {max_attempts} total attempts")
+    return None
+
 # Define algorithm configurations
 configs = {
     # Hill Climbing configurations
     'HC_Standard': {
         'algorithm': 'Hill Climbing',
+        'params': {
+            'max_iterations': 500,
+            'max_no_improvement': 100,
+            'verbose': False
+        }
+    },
+    
+    # Hill Climbing with valid initial solution
+    'HC_Valid_Initial': {
+        'algorithm': 'Hill Climbing Valid',
         'params': {
             'max_iterations': 500,
             'max_no_improvement': 100,
@@ -195,6 +449,7 @@ configs = {
             'verbose': False
         }
     },
+    
     'GA_Ranking_Uniform': {
         'algorithm': 'Genetic Algorithm',
         'params': {
@@ -203,13 +458,14 @@ configs = {
             'selection_operator': selection_ranking,
             'crossover_operator': crossover_uniform_prefer_valid,
             'crossover_rate': 0.8,
-            'mutation_operator': mutate_targeted_player_exchange,
+            'mutation_operator': mutate_swap_constrained,
             'mutation_rate': 0.1,
             'elitism': True,
             'elitism_size': 2,
             'verbose': False
         }
     },
+    
     'GA_Boltzmann_TeamShift': {
         'algorithm': 'Genetic Algorithm',
         'params': {
@@ -217,7 +473,7 @@ configs = {
             'max_generations': 50,
             'selection_operator': selection_boltzmann,
             'selection_params': {'temperature': 1.0},
-            'crossover_operator': crossover_one_point_prefer_valid,
+            'crossover_operator': crossover_uniform_prefer_valid,
             'crossover_rate': 0.8,
             'mutation_operator': mutate_team_shift,
             'mutation_rate': 0.1,
@@ -226,214 +482,235 @@ configs = {
             'verbose': False
         }
     },
+    
     'GA_Hybrid': {
         'algorithm': 'Hybrid GA',
         'params': {
             'population_size': 75,
             'max_generations': 40,
-            'selection_operator': selection_tournament_variable_k,
+            'selection_operator': selection_tournament,
             'selection_params': {'k': 3},
-            'crossover_operator': crossover_uniform_prefer_valid,
+            'crossover_operator': crossover_one_point_prefer_valid,
             'crossover_rate': 0.85,
-            'mutation_operator': mutate_shuffle_within_team_constrained,
+            'mutation_operator': mutate_targeted_player_exchange,
             'mutation_rate': 0.15,
             'elitism': True,
             'elitism_size': 1,
-            'local_search': {
-                'algorithm': 'hill_climbing',
-                'frequency': 5,  # Apply HC every 5 generations
-                'iterations': 50  # HC iterations per application
-            },
+            'local_search': {'algorithm': 'hill_climbing', 'frequency': 5, 'iterations': 50},
             'verbose': False
         }
     }
 }
 
-# Display the configurations
-for name, config in configs.items():
-    print(f"Configuration: {name}")
-    print(f"Algorithm: {config['algorithm']}")
-    print("Parameters:")
-    for param, value in config['params'].items():
-        if param not in ['selection_operator', 'crossover_operator', 'mutation_operator', 'verbose']:
-            print(f"  {param}: {value}")
-    print("")
-
-
 # %% [markdown]
-# ### 2.3 Tracking Function Evaluations
+# ### 2.3 Experiment Setup
 #
-# To ensure fair comparison between algorithms, we'll implement a counter for fitness function evaluations:
+# We'll run each algorithm configuration multiple times to account for randomness and collect statistics.
 
 # %%
-# Create a wrapper for the fitness function to count evaluations
-class FitnessCounter:
-    def __init__(self):
-        self.count = 0
-        self.original_fitness = LeagueSolution.fitness
-        
-    def start_counting(self):
-        self.count = 0
-        LeagueSolution.fitness = self.counting_fitness
-        
-    def stop_counting(self):
-        LeagueSolution.fitness = self.original_fitness
-        return self.count
-    
-    def counting_fitness(self, solution):
-        self.count += 1
-        return self.original_fitness(solution)
-
-# Initialize the counter
-fitness_counter = FitnessCounter()
-
-
-# %% [markdown]
-# ### 2.4 Experiment Runner
-#
-# We'll create a function to run a single experiment with a specific configuration and run number:
-
-# %%
-def run_single_experiment(config_name, config, players_data, run):
+# Function to run a single experiment
+def run_single_experiment(config_name, run_number, configs, players_data):
     """
-    Run a single experiment with a specific configuration and run number.
+    Run a single experiment for a specific configuration and run number.
     
     Args:
-        config_name (str): Name of the configuration
-        config (dict): Configuration dictionary
-        players_data (list): List of player dictionaries
-        run (int): Run number (0-based)
+        config_name: Name of the configuration to run
+        run_number: Run number for this experiment
+        configs: Dictionary of all configurations
+        players_data: Player data for the experiment
         
     Returns:
-        dict: Results of the experiment
+        Dictionary with experiment results or error message
     """
-    # Reset random seed for this run to ensure reproducibility
-    random.seed(42 + run)
-    np.random.seed(42 + run)
+    try:
+        config = configs[config_name]
+        algorithm_name = config['algorithm']
+        params = config['params'].copy()
+        
+        # Reset fitness counter for this experiment
+        from fitness_counter import fitness_counter
+        
+        # Start timing
+        start_time = time.time()
+        
+        # Initialize solution and run algorithm based on configuration
+        if algorithm_name == 'Hill Climbing':
+            # Standard Hill Climbing with potentially invalid initial solution
+            solution = LeagueHillClimbingSolution(players=players_data)
+            
+            # Start counting fitness evaluations
+            fitness_counter.start_counting(LeagueHillClimbingSolution)
+            
+            # Run Hill Climbing
+            best_solution, best_fitness, history = hill_climbing(solution, **params)
+            
+            # Stop counting fitness evaluations
+            evaluations = fitness_counter.stop_counting(LeagueHillClimbingSolution)
+            
+        elif algorithm_name == 'Hill Climbing Valid':
+            # Hill Climbing with guaranteed valid initial solution
+            solution = generate_valid_solution(LeagueHillClimbingSolution, players_data, verbose=False)
+            
+            # If we couldn't generate a valid solution, return error
+            if solution is None:
+                return {
+                    'Configuration': config_name,
+                    'Run': run_number,
+                    'Fitness': float('inf'),
+                    'Evaluations': 0,
+                    'Runtime': 0.0,
+                    'History': [],
+                    'Error': 'Could not generate valid initial solution'
+                }
+            
+            # Start counting fitness evaluations
+            fitness_counter.start_counting(LeagueHillClimbingSolution)
+            
+            # Run Hill Climbing
+            best_solution, best_fitness, history = hill_climbing(solution, **params)
+            
+            # Stop counting fitness evaluations
+            evaluations = fitness_counter.stop_counting(LeagueHillClimbingSolution)
+            
+        elif algorithm_name == 'Simulated Annealing':
+            solution = LeagueSASolution(players=players_data)
+            
+            # Start counting fitness evaluations
+            fitness_counter.start_counting(LeagueSASolution)
+            
+            # Run Simulated Annealing
+            best_solution, best_fitness, history = simulated_annealing(solution, **params)
+            
+            # Stop counting fitness evaluations
+            evaluations = fitness_counter.stop_counting(LeagueSASolution)
+            
+        elif algorithm_name == 'Genetic Algorithm':
+            # Start counting fitness evaluations
+            fitness_counter.start_counting(LeagueSolution)
+            
+            # Run Genetic Algorithm
+            best_solution, best_fitness, history = genetic_algorithm(
+                LeagueSolution, 
+                players_data=players_data,
+                **params
+            )
+            
+            # Stop counting fitness evaluations
+            evaluations = fitness_counter.stop_counting(LeagueSolution)
+            
+        elif algorithm_name == 'Hybrid GA':
+            # Import the necessary solution class for local search
+            from solution import LeagueHillClimbingSolution
+            
+            # Start counting fitness evaluations
+            fitness_counter.start_counting(LeagueSolution)
+            
+            # Extract local search parameters
+            local_search = params.pop('local_search', None)
+            
+            # Run Genetic Algorithm with local search
+            best_solution, best_fitness, history = genetic_algorithm(
+                LeagueSolution, 
+                players_data=players_data,
+                local_search_solution_class=LeagueHillClimbingSolution, # Pass the class itself
+                local_search_params=local_search,
+                **params
+            )
+            
+            # Stop counting fitness evaluations
+            evaluations = fitness_counter.stop_counting(LeagueSolution)
+            
+        else:
+            raise ValueError(f"Unknown algorithm: {algorithm_name}")
+        
+        # Calculate runtime
+        runtime = time.time() - start_time
+        
+        # Return results
+        return {
+            'Configuration': config_name,
+            'Run': run_number,
+            'Fitness': best_fitness,
+            'Evaluations': evaluations,
+            'Runtime': runtime,
+            'History': history
+        }
     
-    # Create a local fitness counter for this process
-    local_counter = FitnessCounter()
-    local_counter.start_counting()
-    
-    # Record start time
-    start_time = time.time()
-    
-    # Run the appropriate algorithm
-    if config['algorithm'] == 'Hill Climbing':
-        # Create initial solution
-        initial_solution = LeagueHillClimbingSolution(players=players_data)
-        
-        # Run Hill Climbing
-        best_solution, best_fitness, history = hill_climbing(
-            initial_solution,
-            **config['params']
-        )
-        
-        iterations = len(history)
-        
-    elif config['algorithm'] == 'Simulated Annealing':
-        # Create initial solution
-        initial_solution = LeagueSASolution(players=players_data)
-        
-        # Run Simulated Annealing
-        best_solution, best_fitness, history = simulated_annealing(
-            initial_solution,
-            **config['params']
-        )
-        
-        iterations = len(history)
-        
-    elif config['algorithm'] in ['Genetic Algorithm', 'Hybrid GA']:
-        # Run Genetic Algorithm
-        best_solution, best_fitness, history = genetic_algorithm(
-            players_data,
-            **config['params']
-        )
-        
-        iterations = len(history)
-    
-    # Record end time and calculate runtime
-    runtime = time.time() - start_time
-    
-    # Get number of fitness evaluations
-    evaluations = local_counter.stop_counting()
-    
-    # Return results
-    return {
-        'Configuration': config_name,
-        'Algorithm': config['algorithm'],
-        'Run': run + 1,
-        'Best Fitness': best_fitness,
-        'Iterations': iterations,
-        'Function Evaluations': evaluations,
-        'Runtime (s)': runtime,
-        'History': history
-    }
+    except Exception as e:
+        # Return error information
+        return {
+            'Configuration': config_name,
+            'Run': run_number,
+            'Fitness': float('inf'),
+            'Evaluations': 0,
+            'Runtime': 0.0,
+            'History': [],
+            'Error': str(e)
+        }
 
-
-# %% [markdown]
-# Now we'll create a function to run all experiments, with options for parallel or sequential execution:
-
-# %%
+# Function to run experiments in parallel or sequentially
 def run_experiments(configs, players_data, num_runs=5, parallel=True, max_workers=None, save_csv=True):
     """
-    Run experiments with all configurations and collect results.
+    Run experiments for all configurations with multiple runs.
     
     Args:
-        configs (dict): Dictionary of configurations
-        players_data (list): List of player dictionaries
-        num_runs (int): Number of runs per configuration
-        parallel (bool): Whether to run experiments in parallel
-        max_workers (int): Maximum number of worker processes (None = auto)
-        save_csv (bool): Whether to save results to CSV
+        configs: Dictionary of configurations to test
+        players_data: Player data for the experiments
+        num_runs: Number of runs per configuration
+        parallel: Whether to run experiments in parallel
+        max_workers: Maximum number of parallel workers (None = auto)
+        save_csv: Whether to save results to CSV
         
     Returns:
-        pandas.DataFrame: Results of all experiments
+        DataFrame with experiment results
     """
-    all_tasks = []
-    
-    # Prepare all tasks
-    for config_name, config in configs.items():
-        for run in range(num_runs):
-            all_tasks.append((config_name, config, players_data, run))
+    # Create a list of all experiments to run
+    experiments = []
+    for config_name in configs:
+        for run in range(1, num_runs + 1):
+            experiments.append((config_name, run))
     
     results = []
     
     if parallel:
-        print(f"Running {len(all_tasks)} experiments in parallel mode...")
-        
         # Run experiments in parallel
+        print(f"Running {len(experiments)} experiments in parallel mode...")
         with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-            # Submit all tasks
-            future_to_task = {executor.submit(run_single_experiment, *task): task for task in all_tasks}
+            # Submit all experiments
+            future_to_exp = {
+                executor.submit(run_single_experiment, config_name, run, configs, players_data): 
+                (config_name, run) for config_name, run in experiments
+            }
             
             # Process results as they complete
-            for i, future in enumerate(concurrent.futures.as_completed(future_to_task)):
-                task = future_to_task[future]
-                config_name, _, _, run = task
-                
+            for future in concurrent.futures.as_completed(future_to_exp):
+                config_name, run = future_to_exp[future]
                 try:
                     result = future.result()
                     results.append(result)
-                    print(f"  Completed {config_name} - Run {run + 1}: Fitness = {result['Best Fitness']:.6f}, "
-                          f"Evaluations = {result['Function Evaluations']}, Runtime = {result['Runtime (s)']:.2f}s")
+                    
+                    # Check for errors
+                    if 'Error' in result:
+                        print(f"Error in {config_name} - Run {run}: {result['Error']}")
+                    else:
+                        print(f"Completed {config_name} - Run {run}: Fitness = {result['Fitness']:.6f}, "
+                              f"Evaluations = {result['Evaluations']}, Runtime = {result['Runtime']:.2f}s")
+                        
                 except Exception as e:
-                    print(f"  Error in {config_name} - Run {run + 1}: {e}")
+                    print(f"Exception in {config_name} - Run {run}: {str(e)}")
     else:
-        print(f"Running {len(all_tasks)} experiments in sequential mode...")
-        
         # Run experiments sequentially
-        for task in all_tasks:
-            config_name, config, players_data, run = task
-            print(f"Running {config_name} - Run {run + 1}...")
+        print(f"Running {len(experiments)} experiments in sequential mode...")
+        for config_name, run in experiments:
+            result = run_single_experiment(config_name, run, configs, players_data)
+            results.append(result)
             
-            try:
-                result = run_single_experiment(config_name, config, players_data, run)
-                results.append(result)
-                print(f"  Completed: Fitness = {result['Best Fitness']:.6f}, "
-                      f"Evaluations = {result['Function Evaluations']}, Runtime = {result['Runtime (s)']:.2f}s")
-            except Exception as e:
-                print(f"  Error: {e}")
+            # Check for errors
+            if 'Error' in result:
+                print(f"Error in {config_name} - Run {run}: {result['Error']}")
+            else:
+                print(f"Completed {config_name} - Run {run}: Fitness = {result['Fitness']:.6f}, "
+                      f"Evaluations = {result['Evaluations']}, Runtime = {result['Runtime']:.2f}s")
     
     # Convert results to DataFrame
     results_df = pd.DataFrame(results)
@@ -441,592 +718,566 @@ def run_experiments(configs, players_data, num_runs=5, parallel=True, max_worker
     # Save results to CSV if requested
     if save_csv:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        csv_filename = f"experiment_results_{timestamp}.csv"
+        filename = f"experiment_results_{timestamp}.csv"
         
-        # Create a copy without the history column for CSV export
-        export_df = results_df.drop(columns=['History'])
-        export_df.to_csv(csv_filename, index=False)
-        print(f"Results saved to {csv_filename}")
+        # Create a copy of the DataFrame without the History column for CSV export
+        export_df = results_df.drop(columns=['History'], errors='ignore')
+        export_df.to_csv(filename, index=False)
+        print(f"Results saved to {filename}")
     
     return results_df
-
 
 # %% [markdown]
 # ## 3. Algorithm Implementations
 #
-# ### 3.1 Hill Climbing
-#
-# Hill Climbing is a local search algorithm that starts with an initial solution and iteratively moves to better neighboring solutions until no improvement is possible.
-#
-# **Key Components:**
-# - **Neighborhood Generation**: Defined in `LeagueHillClimbingSolution.get_neighbors()`, which generates valid neighboring solutions by swapping players between teams.
-# - **Selection Strategy**: We use steepest ascent, selecting the best neighbor at each iteration.
-# - **Termination Criteria**: The algorithm stops when no better neighbor is found or after a maximum number of iterations.
-#
-# ### 3.2 Simulated Annealing
-#
-# Simulated Annealing is inspired by the annealing process in metallurgy. It allows accepting worse solutions with a probability that decreases over time, helping to escape local optima.
-#
-# **Key Components:**
-# - **Random Neighbor Generation**: Defined in `LeagueSASolution.get_random_neighbor()`, which generates a random valid neighboring solution.
-# - **Acceptance Probability**: Based on the temperature and the fitness difference between the current and new solutions.
-# - **Cooling Schedule**: The temperature decreases over time, reducing the probability of accepting worse solutions.
-#
-# ### 3.3 Genetic Algorithm
-#
-# Genetic Algorithm is a population-based search algorithm inspired by natural selection and genetics.
-#
-# **Key Components:**
-# - **Selection Operators**: We've implemented three selection mechanisms:
-#   - Tournament Selection: Selects the best solution from k random candidates.
-#   - Ranking Selection: Selects solutions with probability proportional to their rank.
-#   - Boltzmann Selection: Uses Boltzmann distribution to select solutions.
-#
-# - **Crossover Operators**: We've implemented three crossover operators:
-#   - One-Point Crossover: Creates a child by taking a portion from each parent.
-#   - One-Point Prefer Valid: Tries multiple cut points to find a valid solution.
-#   - Uniform Crossover: Creates a child by randomly selecting genes from either parent.
-#
-# - **Mutation Operators**: We've implemented four mutation operators:
-#   - Swap: Randomly swaps two players between teams.
-#   - Swap Constrained: Swaps players of the same position.
-#   - Team Shift: Shifts all player assignments by a random number.
-#   - Targeted Player Exchange: Swaps players between teams to improve balance.
-#   - Shuffle Within Team: Shuffles players within a team with other teams.
-#
-# - **Elitism**: Preserves the best solutions from one generation to the next.
+# Let's run the experiments and compare the performance of different algorithms.
+
+# %%
+# Run experiments
+results_df = run_experiments(configs, players_data, num_runs=5, parallel=True, save_csv=True)
 
 # %% [markdown]
 # ## 4. Performance Comparison
 #
-# Let's run the experiments and compare the performance of different algorithms:
-
-# %%
-# Run experiments with all configurations
-# You can choose between parallel (parallel=True) and sequential (parallel=False) execution
-# Set max_workers to control the number of parallel processes (None = auto)
-# Set save_csv=True to save results to CSV file
-
-results_df = run_experiments(
-    configs=configs, 
-    players_data=players_data, 
-    num_runs=5,
-    parallel=True,  # Set to False for sequential execution
-    max_workers=None,  # None = auto, or specify a number
-    save_csv=True  # Save results to CSV
-)
-
-# %% [markdown]
 # ### 4.1 Solution Quality Comparison
-#
-# Let's compare the quality of solutions found by different algorithms:
 
 # %%
-# Calculate summary statistics for each configuration
-summary = results_df.groupby('Configuration')['Best Fitness'].agg(['mean', 'std', 'min', 'max']).reset_index()
-summary = summary.sort_values('mean')
+# Compare solution quality (fitness values)
+plt.figure(figsize=(14, 8))
+sns.set_style("whitegrid")
+ax = sns.boxplot(x='Configuration', y='Fitness', 
+                data=results_df[results_df['Fitness'] < float('inf')],
+                palette='viridis', width=0.6)
+plt.title('Solution Quality Comparison Across Algorithms', fontsize=16, fontweight='bold')
+plt.xlabel('Algorithm Configuration', fontsize=14)
+plt.ylabel('Fitness Value (Lower is Better)', fontsize=14)
+plt.xticks(rotation=45, ha='right', fontsize=12)
+plt.grid(True, linestyle='--', alpha=0.7)
 
-# Display summary statistics
-print("Solution Quality Summary (lower is better):")
-print(summary)
+# Add mean markers
+means = results_df[results_df['Fitness'] < float('inf')].groupby('Configuration')['Fitness'].mean()
+for i, mean_val in enumerate(means):
+    ax.plot(i, mean_val, marker='o', color='red', markersize=8)
 
-# Plot solution quality comparison
-plt.figure(figsize=(12, 6))
-sns.boxplot(x='Configuration', y='Best Fitness', data=results_df, order=summary['Configuration'])
-plt.title('Solution Quality Comparison (lower is better)')
-plt.xticks(rotation=45)
-plt.grid(True)
 plt.tight_layout()
 plt.show()
+
+# Display summary statistics with improved formatting
+fitness_stats = results_df.groupby('Configuration')['Fitness'].agg(['mean', 'std', 'min', 'max'])
+print("Fitness Statistics (Lower is Better):")
+print("=" * 80)
+formatted_stats = fitness_stats.copy()
+for col in formatted_stats.columns:
+    formatted_stats[col] = formatted_stats[col].apply(lambda x: f"{x:.6f}")
+print(formatted_stats)
 
 # %% [markdown]
 # ### 4.2 Computational Efficiency Comparison
-#
-# Let's compare the computational efficiency of different algorithms:
 
 # %%
-# Calculate summary statistics for runtime and function evaluations
-runtime_summary = results_df.groupby('Configuration')['Runtime (s)'].mean().reset_index()
-runtime_summary = runtime_summary.sort_values('Runtime (s)')
+# Compare runtime
+plt.figure(figsize=(14, 8))
+sns.set_style("whitegrid")
+ax = sns.barplot(x='Configuration', y='Runtime', data=results_df, 
+                palette='Blues_d', errorbar=('ci', 95))
+plt.title('Runtime Comparison of Optimization Algorithms', fontsize=16, fontweight='bold')
+plt.xlabel('Algorithm Configuration', fontsize=14)
+plt.ylabel('Runtime (seconds)', fontsize=14)
+plt.xticks(rotation=45, ha='right', fontsize=12)
+plt.grid(True, linestyle='--', alpha=0.7)
 
-evaluations_summary = results_df.groupby('Configuration')['Function Evaluations'].mean().reset_index()
-evaluations_summary = evaluations_summary.sort_values('Function Evaluations')
+# Add value labels on top of bars
+for i, p in enumerate(ax.patches):
+    ax.annotate(f'{p.get_height():.2f}s', 
+                (p.get_x() + p.get_width() / 2., p.get_height()), 
+                ha='center', va='bottom', fontsize=10, rotation=0)
 
-# Plot runtime comparison
-plt.figure(figsize=(12, 6))
-sns.barplot(x='Configuration', y='Runtime (s)', data=runtime_summary)
-plt.title('Runtime Comparison (lower is better)')
-plt.xticks(rotation=45)
-plt.grid(True)
 plt.tight_layout()
 plt.show()
 
-# Plot function evaluations comparison
-plt.figure(figsize=(12, 6))
-sns.barplot(x='Configuration', y='Function Evaluations', data=evaluations_summary)
-plt.title('Function Evaluations Comparison (lower is better)')
-plt.xticks(rotation=45)
-plt.grid(True)
+# Compare function evaluations
+plt.figure(figsize=(14, 8))
+sns.set_style("whitegrid")
+ax = sns.barplot(x='Configuration', y='Evaluations', data=results_df,
+                palette='Greens_d', errorbar=('ci', 95))
+plt.title('Function Evaluations Comparison (Computational Efficiency)', fontsize=16, fontweight='bold')
+plt.xlabel('Algorithm Configuration', fontsize=14)
+plt.ylabel('Number of Function Evaluations', fontsize=14)
+plt.xticks(rotation=45, ha='right', fontsize=12)
+plt.grid(True, linestyle='--', alpha=0.7)
+
+# Add value labels on top of bars
+for i, p in enumerate(ax.patches):
+    ax.annotate(f'{int(p.get_height())}', 
+                (p.get_x() + p.get_width() / 2., p.get_height()), 
+                ha='center', va='bottom', fontsize=10, rotation=0)
+
 plt.tight_layout()
 plt.show()
 
 # %% [markdown]
 # ### 4.3 Convergence Analysis
-#
-# Let's analyze the convergence behavior of different algorithms:
 
 # %%
-# Plot convergence curves for each algorithm (using the first run)
+# Plot convergence curves for each algorithm (first run)
 plt.figure(figsize=(14, 8))
 
-for config_name in configs.keys():
-    # Get the first run for this configuration
-    run_data = results_df[(results_df['Configuration'] == config_name) & (results_df['Run'] == 1)].iloc[0]
-    
-    # Plot the convergence curve
-    plt.plot(run_data['History'], label=config_name)
+# Use a consistent color palette
+colors = plt.cm.tab10(np.linspace(0, 1, len(configs)))
+color_idx = 0
 
-plt.title('Convergence Curves (first run)')
-plt.xlabel('Iterations')
-plt.ylabel('Fitness (lower is better)')
-plt.legend()
-plt.grid(True)
+for config_name in configs.keys():
+    # Get the first run for this configuration that has valid data
+    config_runs = results_df[(results_df['Configuration'] == config_name)]
+    
+    if len(config_runs) > 0 and 'History' in config_runs.columns:
+        # Find the first run with a valid history
+        for _, run_data in config_runs.iterrows():
+            if isinstance(run_data['History'], list) and len(run_data['History']) > 0:
+                # Plot the convergence curve with consistent color and line style
+                plt.plot(run_data['History'], label=config_name, 
+                         color=colors[color_idx], linewidth=2)
+                color_idx += 1
+                break
+
+plt.title('Convergence Curves of Optimization Algorithms', fontsize=16, fontweight='bold')
+plt.xlabel('Iterations', fontsize=14)
+plt.ylabel('Fitness Value (Lower is Better)', fontsize=14)
+plt.legend(title='Algorithm Configuration', fontsize=12, title_fontsize=13)
+plt.grid(True, linestyle='--', alpha=0.7)
+plt.tick_params(axis='both', which='major', labelsize=12)
 plt.tight_layout()
 plt.show()
 
 # Plot normalized convergence curves (by function evaluations)
 plt.figure(figsize=(14, 8))
 
-for config_name in configs.keys():
-    # Get the first run for this configuration
-    run_data = results_df[(results_df['Configuration'] == config_name) & (results_df['Run'] == 1)].iloc[0]
-    
-    # Calculate evaluations per iteration
-    evals_per_iter = run_data['Function Evaluations'] / len(run_data['History'])
-    
-    # Create x-axis values (cumulative evaluations)
-    x_values = [i * evals_per_iter for i in range(len(run_data['History']))]
-    
-    # Plot the normalized convergence curve
-    plt.plot(x_values, run_data['History'], label=config_name)
+# Use a consistent color palette
+colors = plt.cm.tab10(np.linspace(0, 1, len(configs)))
+color_idx = 0
 
-plt.title('Normalized Convergence Curves (by function evaluations)')
-plt.xlabel('Function Evaluations')
-plt.ylabel('Fitness (lower is better)')
-plt.legend()
-plt.grid(True)
+for config_name in configs.keys():
+    # Get the first run for this configuration that has valid data
+    config_runs = results_df[(results_df['Configuration'] == config_name)]
+    
+    if len(config_runs) > 0 and 'History' in config_runs.columns:
+        # Find the first run with a valid history
+        for _, run_data in config_runs.iterrows():
+            if isinstance(run_data['History'], list) and len(run_data['History']) > 0:
+                # Calculate evaluations per iteration (approximately)
+                evals_per_iter = run_data['Evaluations'] / len(run_data['History'])
+                
+                # Create x-axis values representing function evaluations
+                x_values = [i * evals_per_iter for i in range(len(run_data['History']))]
+                
+                # Plot the normalized convergence curve with consistent color and line style
+                plt.plot(x_values, run_data['History'], label=config_name,
+                         color=colors[color_idx], linewidth=2)
+                color_idx += 1
+                break
+
+plt.title('Normalized Convergence Curves by Function Evaluations', fontsize=16, fontweight='bold')
+plt.xlabel('Number of Function Evaluations', fontsize=14)
+plt.ylabel('Fitness Value (Lower is Better)', fontsize=14)
+plt.legend(title='Algorithm Configuration', fontsize=12, title_fontsize=13)
+plt.grid(True, linestyle='--', alpha=0.7)
+plt.tick_params(axis='both', which='major', labelsize=12)
 plt.tight_layout()
 plt.show()
-
 
 # %% [markdown]
 # ## 5. Statistical Analysis
 #
-# Let's perform statistical tests to determine if the differences between algorithms are significant. We'll follow a structured decision flow to select the appropriate statistical tests.
+# Let's perform statistical tests to determine if there are significant differences between algorithms.
 
 # %%
+# Function to perform statistical analysis
 def perform_statistical_analysis(results_df):
     """
-    Perform statistical analysis on experiment results following a structured decision flow.
+    Perform statistical analysis on experiment results.
     
     Args:
-        results_df (pandas.DataFrame): DataFrame containing experiment results
+        results_df: DataFrame with experiment results
         
     Returns:
-        dict: Dictionary containing statistical test results
+        Dictionary with statistical analysis results
     """
-    # Step 1: Check if we have at least 2 configurations to compare
-    configurations = results_df['Configuration'].unique()
-    if len(configurations) < 2:
-        print("Not enough configurations to perform statistical analysis.")
-        return {}
+    # Filter out invalid results (inf fitness)
+    valid_results = results_df[results_df['Fitness'] < float('inf')]
     
-    # Step 2: Determine if we have 2 or more configurations
-    if len(configurations) == 2:
+    # Get unique configurations
+    configurations = valid_results['Configuration'].unique()
+    
+    # If we have only one configuration, no comparison needed
+    if len(configurations) <= 1:
+        print("Not enough valid configurations for statistical comparison")
+        return None
+    elif len(configurations) == 2:
         print("\n=== Two-Group Comparison ===")
-        return two_group_comparison(results_df, configurations)
+        return two_group_comparison(valid_results, configurations)
     else:
         print("\n=== Multiple-Group Comparison ===")
-        return multiple_group_comparison(results_df, configurations)
+        return multiple_group_comparison(valid_results, configurations)
 
+# Function to perform two-group comparison
 def two_group_comparison(results_df, configurations):
     """
     Perform statistical comparison between two groups.
     
     Args:
-        results_df (pandas.DataFrame): DataFrame containing experiment results
-        configurations (array): Array of configuration names
+        results_df: DataFrame with experiment results
+        configurations: List of two configurations to compare
         
     Returns:
-        dict: Dictionary containing statistical test results
+        Dictionary with statistical analysis results
     """
     # Extract data for each configuration
-    group1 = results_df[results_df['Configuration'] == configurations[0]]['Best Fitness'].values
-    group2 = results_df[results_df['Configuration'] == configurations[1]]['Best Fitness'].values
+    group1 = results_df[results_df['Configuration'] == configurations[0]]['Fitness']
+    group2 = results_df[results_df['Configuration'] == configurations[1]]['Fitness']
     
-    # Step 3: Test for normality using Shapiro-Wilk test
-    print("Testing for normality (Shapiro-Wilk):")
-    _, p_value1 = stats.shapiro(group1)
-    _, p_value2 = stats.shapiro(group2)
-    print(f"  {configurations[0]}: p-value = {p_value1:.4f} ({'Normal' if p_value1 > 0.05 else 'Non-normal'})")
-    print(f"  {configurations[1]}: p-value = {p_value2:.4f} ({'Normal' if p_value2 > 0.05 else 'Non-normal'})")
+    # Check for normality using Shapiro-Wilk test
+    _, p_norm1 = stats.shapiro(group1)
+    _, p_norm2 = stats.shapiro(group2)
     
-    # Both groups must be normal to use parametric tests
-    is_normal = p_value1 > 0.05 and p_value2 > 0.05
+    print(f"Shapiro-Wilk normality test p-values: {configurations[0]}: {p_norm1:.4f}, {configurations[1]}: {p_norm2:.4f}")
     
-    results = {}
+    # Determine if data is normally distributed
+    alpha = 0.05
+    is_normal = (p_norm1 > alpha) and (p_norm2 > alpha)
     
     if is_normal:
-        # Step 4a: Test for equal variances using Levene's test
-        print("\nTesting for equal variances (Levene's test):")
-        _, p_value_var = stats.levene(group1, group2)
-        equal_var = p_value_var > 0.05
-        print(f"  p-value = {p_value_var:.4f} ({'Equal variances' if equal_var else 'Unequal variances'})")
-        
-        # Step 5a: Perform t-test (either with equal or unequal variances)
-        if equal_var:
-            print("\nPerforming Independent t-test (equal variances):")
-            t_stat, p_value = stats.ttest_ind(group1, group2, equal_var=True)
-            test_name = "Independent t-test"
-        else:
-            print("\nPerforming Welch's t-test (unequal variances):")
-            t_stat, p_value = stats.ttest_ind(group1, group2, equal_var=False)
-            test_name = "Welch's t-test"
-            
-        print(f"  {test_name}: t-statistic = {t_stat:.4f}, p-value = {p_value:.4f}")
-        print(f"  Significant difference: {'Yes' if p_value < 0.05 else 'No'}")
+        # Use t-test for normally distributed data
+        print("Data appears normally distributed, using t-test")
+        t_stat, p_value = stats.ttest_ind(group1, group2, equal_var=False)
+        test_name = "Welch's t-test"
         
         # Calculate effect size (Cohen's d)
-        mean1, mean2 = np.mean(group1), np.mean(group2)
-        std1, std2 = np.std(group1, ddof=1), np.std(group2, ddof=1)
-        n1, n2 = len(group1), len(group2)
+        mean1, mean2 = group1.mean(), group2.mean()
+        std1, std2 = group1.std(), group2.std()
+        pooled_std = np.sqrt(((len(group1) - 1) * std1**2 + (len(group2) - 1) * std2**2) / 
+                             (len(group1) + len(group2) - 2))
+        effect_size = abs(mean1 - mean2) / pooled_std
+        effect_size_name = "Cohen's d"
         
-        # Pooled standard deviation
-        pooled_std = np.sqrt(((n1 - 1) * std1**2 + (n2 - 1) * std2**2) / (n1 + n2 - 2))
-        cohen_d = abs(mean1 - mean2) / pooled_std
-        
-        print(f"  Effect size (Cohen's d): {cohen_d:.4f}")
-        
-        # Interpret Cohen's d
-        if cohen_d < 0.2:
-            effect_interpretation = "Negligible effect"
-        elif cohen_d < 0.5:
-            effect_interpretation = "Small effect"
-        elif cohen_d < 0.8:
-            effect_interpretation = "Medium effect"
-        else:
-            effect_interpretation = "Large effect"
-            
-        print(f"  Interpretation: {effect_interpretation}")
-        
-        results = {
-            'test': test_name,
-            'statistic': t_stat,
-            'p_value': p_value,
-            'significant': p_value < 0.05,
-            'effect_size': cohen_d,
-            'effect_interpretation': effect_interpretation
-        }
     else:
-        # Step 4b: Perform Mann-Whitney U test (non-parametric)
-        print("\nPerforming Mann-Whitney U test (non-parametric):")
+        # Use Mann-Whitney U test for non-normally distributed data
+        print("Data does not appear normally distributed, using Mann-Whitney U test")
         u_stat, p_value = stats.mannwhitneyu(group1, group2)
-        print(f"  Mann-Whitney U: U-statistic = {u_stat:.4f}, p-value = {p_value:.4f}")
-        print(f"  Significant difference: {'Yes' if p_value < 0.05 else 'No'}")
+        test_name = "Mann-Whitney U test"
         
         # Calculate effect size (r = Z / sqrt(N))
         n1, n2 = len(group1), len(group2)
-        n_total = n1 + n2
-        
-        # Convert U to Z
-        mean_u = n1 * n2 / 2
-        std_u = np.sqrt(n1 * n2 * (n1 + n2 + 1) / 12)
-        z = (u_stat - mean_u) / std_u
-        
-        # Calculate effect size r
-        r = abs(z) / np.sqrt(n_total)
-        
-        print(f"  Effect size (r): {r:.4f}")
-        
-        # Interpret r
-        if r < 0.1:
-            effect_interpretation = "Negligible effect"
-        elif r < 0.3:
-            effect_interpretation = "Small effect"
-        elif r < 0.5:
-            effect_interpretation = "Medium effect"
-        else:
-            effect_interpretation = "Large effect"
-            
-        print(f"  Interpretation: {effect_interpretation}")
-        
-        results = {
-            'test': 'Mann-Whitney U',
-            'statistic': u_stat,
-            'p_value': p_value,
-            'significant': p_value < 0.05,
-            'effect_size': r,
-            'effect_interpretation': effect_interpretation
-        }
+        z_score = stats.norm.ppf(1 - p_value/2)  # Two-tailed p-value to z-score
+        effect_size = abs(z_score) / np.sqrt(n1 + n2)
+        effect_size_name = "r (rank-biserial correlation)"
     
-    return results
+    # Interpret effect size
+    if effect_size < 0.2:
+        effect_interpretation = "Small"
+    elif effect_size < 0.5:
+        effect_interpretation = "Medium"
+    elif effect_size < 0.8:
+        effect_interpretation = "Large"
+    else:
+        effect_interpretation = "Very Large"
+    
+    # Determine significance
+    is_significant = p_value < alpha
+    
+    print(f"{test_name} p-value: {p_value:.4f}")
+    print(f"Effect size ({effect_size_name}): {effect_size:.4f} ({effect_interpretation})")
+    print(f"Significant difference: {is_significant}")
+    
+    # Return results
+    return {
+        'test_name': test_name,
+        'p_value': p_value,
+        'effect_size': effect_size,
+        'effect_size_name': effect_size_name,
+        'effect_interpretation': effect_interpretation,
+        'is_significant': is_significant,
+        'better_configuration': configurations[0] if group1.mean() < group2.mean() else configurations[1]
+    }
 
+# Function to perform multiple-group comparison
 def multiple_group_comparison(results_df, configurations):
     """
     Perform statistical comparison between multiple groups.
     
     Args:
-        results_df (pandas.DataFrame): DataFrame containing experiment results
-        configurations (array): Array of configuration names
+        results_df: DataFrame with experiment results
+        configurations: List of configurations to compare
         
     Returns:
-        dict: Dictionary containing statistical test results
+        Dictionary with statistical analysis results
     """
-    # Extract data for each configuration
-    groups = [results_df[results_df['Configuration'] == config]['Best Fitness'].values 
-              for config in configurations]
+    # Check if we have enough data for each configuration
+    groups = []
+    valid_configs = []
+    for config in configurations:
+        group = results_df[results_df['Configuration'] == config]['Fitness']
+        if len(group) >= 3:  # Need at least 3 samples for statistical tests
+            groups.append(group)
+            valid_configs.append(config)
+        else:
+            print(f"Warning: Configuration {config} has fewer than 3 valid results, excluding from analysis")
     
-    # Step 3: Test for normality using Shapiro-Wilk test
-    print("Testing for normality (Shapiro-Wilk):")
-    normality_results = []
-    for i, config in enumerate(configurations):
-        _, p_value = stats.shapiro(groups[i])
-        is_normal = p_value > 0.05
-        normality_results.append(is_normal)
-        print(f"  {config}: p-value = {p_value:.4f} ({'Normal' if is_normal else 'Non-normal'})")
+    if len(groups) < 2:
+        print("Not enough valid configurations with sufficient data for statistical comparison")
+        return None
     
-    # All groups must be normal to use parametric tests
-    all_normal = all(normality_results)
+    # Check for normality using Shapiro-Wilk test
+    normal_data = True
+    for i, config in enumerate(valid_configs):
+        if i < len(groups):
+            # Handle potential errors in Shapiro-Wilk test
+            try:
+                _, p_norm = stats.shapiro(groups[i])
+                print(f"Shapiro-Wilk normality test p-value for {config}: {p_norm:.4f}")
+                if p_norm <= 0.05:
+                    normal_data = False
+            except Exception as e:
+                print(f"Error in normality test for {config}: {str(e)}")
+                normal_data = False  # Assume non-normal if test fails
     
-    results = {}
-    
-    if all_normal:
-        # Step 4a: Perform ANOVA (parametric)
-        print("\nPerforming One-way ANOVA (parametric):")
-        f_stat, p_value = stats.f_oneway(*groups)
-        print(f"  ANOVA: F-statistic = {f_stat:.4f}, p-value = {p_value:.4f}")
-        print(f"  Significant difference: {'Yes' if p_value < 0.05 else 'No'}")
+    # Determine which test to use based on normality
+    alpha = 0.05
+    if normal_data:
+        # Use one-way ANOVA for normally distributed data
+        print("Data appears normally distributed, using one-way ANOVA")
+        try:
+            f_stat, p_value = stats.f_oneway(*groups)
+            test_name = "One-way ANOVA"
+            
+            # Calculate effect size (Eta-squared)
+            # Convert groups to a single array and create a group label array
+            all_data = np.concatenate(groups)
+            group_labels = np.concatenate([[i] * len(group) for i, group in enumerate(groups)])
+            
+            # Calculate grand mean and group means
+            grand_mean = np.mean(all_data)
+            group_means = [np.mean(group) for group in groups]
+        except Exception as e:
+            print(f"Error in ANOVA test: {str(e)}")
+            print("Falling back to non-parametric Kruskal-Wallis test")
+            normal_data = False  # Fall back to non-parametric test
         
-        # Calculate effect size (Eta-squared)
-        # Flatten all groups into a single array
-        all_values = np.concatenate(groups)
-        grand_mean = np.mean(all_values)
-        
-        # Calculate sum of squares between groups (SSB)
-        ssb = sum(len(group) * (np.mean(group) - grand_mean)**2 for group in groups)
-        
-        # Calculate sum of squares total (SST)
-        sst = sum((x - grand_mean)**2 for x in all_values)
+        # Calculate sum of squares
+        ss_total = np.sum((all_data - grand_mean) ** 2)
+        ss_between = np.sum([len(group) * (mean - grand_mean) ** 2 for group, mean in zip(groups, group_means)])
         
         # Calculate Eta-squared
-        eta_squared = ssb / sst
+        effect_size = ss_between / ss_total
+        effect_size_name = "Eta-squared"
         
-        print(f"  Effect size (Eta-squared): {eta_squared:.4f}")
+    else:
+        # Use Kruskal-Wallis test for non-normally distributed data
+        print("Data does not appear normally distributed, using Kruskal-Wallis test")
+        h_stat, p_value = stats.kruskal(*groups)
+        test_name = "Kruskal-Wallis test"
         
-        # Interpret Eta-squared
-        if eta_squared < 0.01:
-            effect_interpretation = "Negligible effect"
-        elif eta_squared < 0.06:
-            effect_interpretation = "Small effect"
-        elif eta_squared < 0.14:
-            effect_interpretation = "Medium effect"
-        else:
-            effect_interpretation = "Large effect"
-            
-        print(f"  Interpretation: {effect_interpretation}")
+        # Calculate effect size (Eta-squared for Kruskal-Wallis)
+        # This is an approximation based on the H statistic
+        n_total = sum(len(group) for group in groups)
+        effect_size = (h_stat - len(groups) + 1) / (n_total - len(groups))
+        effect_size_name = "Eta-squared (H)"
+    
+    # Interpret effect size
+    if effect_size < 0.01:
+        effect_interpretation = "Very Small"
+    elif effect_size < 0.06:
+        effect_interpretation = "Small"
+    elif effect_size < 0.14:
+        effect_interpretation = "Medium"
+    else:
+        effect_interpretation = "Large"
+    
+    # Determine significance
+    is_significant = p_value < alpha
+    
+    print(f"{test_name} p-value: {p_value:.4f}")
+    print(f"Effect size ({effect_size_name}): {effect_size:.4f} ({effect_interpretation})")
+    print(f"Significant difference: {is_significant}")
+    
+    # If significant, perform post-hoc tests
+    significant_pairs = []
+    if is_significant:
+        print("\n=== Post-hoc Tests ===")
         
-        results = {
-            'test': 'One-way ANOVA',
-            'statistic': f_stat,
-            'p_value': p_value,
-            'significant': p_value < 0.05,
-            'effect_size': eta_squared,
-            'effect_interpretation': effect_interpretation
-        }
-        
-        # Step 5a: Perform post-hoc tests if ANOVA is significant
-        if p_value < 0.05:
-            print("\nPerforming Tukey HSD post-hoc test:")
+        if normal_data:
+            # Use Tukey HSD for normally distributed data
             from statsmodels.stats.multicomp import pairwise_tukeyhsd
             
             # Prepare data for Tukey HSD
-            fitness_values = results_df['Best Fitness'].values
-            config_labels = results_df['Configuration'].values
+            all_data = np.concatenate(groups)
+            group_labels = np.concatenate([[str(configurations[i])] * len(group) for i, group in enumerate(groups) if i < len(configurations)])
             
             # Perform Tukey HSD test
-            tukey_results = pairwise_tukeyhsd(fitness_values, config_labels, alpha=0.05)
+            tukey_results = pairwise_tukeyhsd(all_data, group_labels, alpha=alpha)
             print(tukey_results)
             
-            # Store significant pairs
-            significant_pairs = []
-            for i, row in enumerate(tukey_results.summary().data[1:]):
-                group1, group2, _, _, _, reject = row
-                if reject:
-                    significant_pairs.append((group1, group2))
+            # Extract significant pairs
+            for i in range(len(tukey_results.reject)):
+                if tukey_results.reject[i]:
+                    pair = (tukey_results.groupsunique[tukey_results.data[i, 0]], 
+                            tukey_results.groupsunique[tukey_results.data[i, 1]])
+                    significant_pairs.append(pair)
             
-            results['post_hoc'] = {
-                'test': 'Tukey HSD',
-                'significant_pairs': significant_pairs
-            }
-    else:
-        # Step 4b: Perform Kruskal-Wallis test (non-parametric)
-        print("\nPerforming Kruskal-Wallis test (non-parametric):")
-        h_stat, p_value = stats.kruskal(*groups)
-        print(f"  Kruskal-Wallis: H-statistic = {h_stat:.4f}, p-value = {p_value:.4f}")
-        print(f"  Significant difference: {'Yes' if p_value < 0.05 else 'No'}")
-        
-        # Calculate effect size (Eta-squared for Kruskal-Wallis)
-        n_total = sum(len(group) for group in groups)
-        eta_squared_h = (h_stat - len(groups) + 1) / (n_total - len(groups))
-        eta_squared_h = max(0, eta_squared_h)  # Ensure non-negative
-        
-        print(f"  Effect size (Eta-squared H): {eta_squared_h:.4f}")
-        
-        # Interpret Eta-squared H (same thresholds as Eta-squared)
-        if eta_squared_h < 0.01:
-            effect_interpretation = "Negligible effect"
-        elif eta_squared_h < 0.06:
-            effect_interpretation = "Small effect"
-        elif eta_squared_h < 0.14:
-            effect_interpretation = "Medium effect"
+            post_hoc_name = "Tukey HSD"
+            
         else:
-            effect_interpretation = "Large effect"
-            
-        print(f"  Interpretation: {effect_interpretation}")
-        
-        results = {
-            'test': 'Kruskal-Wallis',
-            'statistic': h_stat,
-            'p_value': p_value,
-            'significant': p_value < 0.05,
-            'effect_size': eta_squared_h,
-            'effect_interpretation': effect_interpretation
-        }
-        
-        # Step 5b: Perform post-hoc tests if Kruskal-Wallis is significant
-        if p_value < 0.05:
-            print("\nPerforming Dunn's test with Bonferroni correction:")
-            from scikit_posthocs import posthoc_dunn
-            
-            # Prepare data for Dunn's test
-            dunn_data = {}
-            for i, config in enumerate(configurations):
-                dunn_data[config] = groups[i]
-            
-            # Perform Dunn's test
-            dunn_results = posthoc_dunn(dunn_data, p_adjust='bonferroni')
-            print(dunn_results)
-            
-            # Store significant pairs
-            significant_pairs = []
-            for i in range(len(configurations)):
-                for j in range(i+1, len(configurations)):
-                    if dunn_results.iloc[i, j] < 0.05:
-                        significant_pairs.append((configurations[i], configurations[j]))
-            
-            results['post_hoc'] = {
-                'test': "Dunn's test with Bonferroni correction",
-                'significant_pairs': significant_pairs
-            }
+            # Use Dunn's test with Bonferroni correction for non-normally distributed data
+            try:
+                # Prepare data for Dunn's test using scikit-posthocs
+                dunn_data = {}
+                for i, config in enumerate(configurations):
+                    if i < len(groups):
+                        dunn_data[config] = groups[i]
+                
+                # Perform Dunn's test
+                dunn_results = sp.posthoc_dunn(dunn_data, p_adjust='bonferroni')
+                print(dunn_results)
+                
+                # Extract significant pairs
+                for i in range(len(dunn_results.columns)):
+                    for j in range(i+1, len(dunn_results.columns)):
+                        if dunn_results.iloc[i, j] < alpha:
+                            pair = (dunn_results.columns[i], dunn_results.columns[j])
+                            significant_pairs.append(pair)
+                
+                post_hoc_name = "Dunn's test with Bonferroni correction"
+            except Exception as e:
+                print(f"Error performing Dunn's test: {str(e)}")
+                print("Falling back to pairwise Mann-Whitney U tests with Bonferroni correction")
+                
+                # Perform pairwise Mann-Whitney U tests with Bonferroni correction
+                num_comparisons = len(groups) * (len(groups) - 1) // 2
+                adjusted_alpha = alpha / num_comparisons
+                
+                for i in range(len(groups)):
+                    for j in range(i+1, len(groups)):
+                        u_stat, p_value = stats.mannwhitneyu(groups[i], groups[j])
+                        print(f"{configurations[i]} vs {configurations[j]}: p-value = {p_value:.4f}")
+                        
+                        if p_value < adjusted_alpha:
+                            pair = (configurations[i], configurations[j])
+                            significant_pairs.append(pair)
+                            print(f"  Significant difference (p < {adjusted_alpha:.4f})")
+                
+                post_hoc_name = "Pairwise Mann-Whitney U tests with Bonferroni correction"
     
-    return results
+    # Find the best configuration
+    mean_fitness = [group.mean() for group in groups]
+    best_idx = np.argmin(mean_fitness)
+    best_configuration = configurations[best_idx]
+    
+    # Return results
+    return {
+        'test_name': test_name,
+        'p_value': p_value,
+        'effect_size': effect_size,
+        'effect_size_name': effect_size_name,
+        'effect_interpretation': effect_interpretation,
+        'is_significant': is_significant,
+        'post_hoc_name': post_hoc_name if is_significant else None,
+        'significant_pairs': significant_pairs,
+        'best_configuration': best_configuration
+    }
+
+# Function to plot results with significance annotations
+def plot_with_significance(results_df, statistical_results):
+    """
+    Plot results with significance annotations.
+    
+    Args:
+        results_df: DataFrame with experiment results
+        statistical_results: Results from statistical analysis
+    """
+    if statistical_results is None:
+        print("No statistical results available for significance plotting")
+        return
+    
+    # Filter out invalid results (inf fitness)
+    valid_results = results_df[results_df['Fitness'] < float('inf')]
+    
+    if len(valid_results) == 0:
+        print("No valid results available for significance plotting")
+        return
+    
+    # Create boxplot with improved styling
+    plt.figure(figsize=(14, 8))
+    sns.set_style("whitegrid")
+    ax = sns.boxplot(x='Configuration', y='Fitness', data=valid_results, 
+                    palette='viridis', width=0.6)
+    plt.title('Solution Quality Comparison with Statistical Significance', 
+              fontsize=16, fontweight='bold')
+    plt.xlabel('Algorithm Configuration', fontsize=14)
+    plt.ylabel('Fitness Value (Lower is Better)', fontsize=14)
+    plt.xticks(rotation=45, ha='right', fontsize=12)
+    plt.grid(True, linestyle='--', alpha=0.7)
+    
+    # Add significance annotations if there are significant differences
+    if statistical_results.get('is_significant', False) and 'significant_pairs' in statistical_results:
+        # Get the positions of the boxes
+        box_positions = {config: i for i, config in enumerate(valid_results['Configuration'].unique())}
+        
+        # Add annotations for significant pairs
+        y_max = valid_results['Fitness'].max()
+        y_range = valid_results['Fitness'].max() - valid_results['Fitness'].min()
+        
+        # Add a legend for significance levels
+        plt.figtext(0.01, 0.01, "* p < 0.05, ** p < 0.01, *** p < 0.001", 
+                   ha="left", fontsize=12, bbox={"facecolor":"white", "alpha":0.8, "pad":5})
+        
+        for i, (config1, config2) in enumerate(statistical_results['significant_pairs']):
+            if config1 in box_positions and config2 in box_positions:
+                x1, x2 = box_positions[config1], box_positions[config2]
+                y = y_max + (i + 1) * y_range * 0.05
+                
+                # Draw the line
+                plt.plot([x1, x2], [y, y], 'k-', linewidth=1.5)
+                plt.plot([x1, x1], [y - y_range * 0.01, y], 'k-', linewidth=1.5)
+                plt.plot([x2, x2], [y - y_range * 0.01, y], 'k-', linewidth=1.5)
+                
+                # Determine significance level symbol
+                if 'p_values' in statistical_results and len(statistical_results['p_values']) > i:
+                    p_value = statistical_results['p_values'][i]
+                    if p_value < 0.001:
+                        sig_symbol = '***'
+                    elif p_value < 0.01:
+                        sig_symbol = '**'
+                    else:
+                        sig_symbol = '*'
+                else:
+                    sig_symbol = '*'
+                
+                # Add significance symbol
+                plt.text((x1 + x2) / 2, y, sig_symbol, ha='center', va='bottom', fontsize=14)
+    
+    # Add a note about the best configuration if available
+    if 'best_configuration' in statistical_results:
+        best_config = statistical_results['best_configuration']
+        plt.figtext(0.5, 0.01, f"Best configuration: {best_config}", 
+                   ha="center", fontsize=12, bbox={"facecolor":"lightgreen", "alpha":0.8, "pad":5})
+    
+    plt.tight_layout()
+    plt.show()
 
 # Perform statistical analysis
 statistical_results = perform_statistical_analysis(results_df)
 
-
-# %% [markdown]
-# ### 5.1 Visualizing Statistical Results
-#
-# Let's create visualizations that incorporate the statistical significance information:
-
-# %%
-def plot_with_significance(results_df, statistical_results):
-    """
-    Create boxplot with statistical significance annotations.
-    
-    Args:
-        results_df (pandas.DataFrame): DataFrame containing experiment results
-        statistical_results (dict): Dictionary containing statistical test results
-    """
-    # Calculate summary statistics for each configuration
-    summary = results_df.groupby('Configuration')['Best Fitness'].agg(['mean', 'std', 'min', 'max']).reset_index()
-    summary = summary.sort_values('mean')
-    
-    # Create boxplot
-    plt.figure(figsize=(14, 8))
-    ax = sns.boxplot(x='Configuration', y='Best Fitness', data=results_df, order=summary['Configuration'])
-    
-    # Add statistical significance annotations if available
-    if 'significant' in statistical_results and statistical_results['significant']:
-        if 'post_hoc' in statistical_results:
-            # Get the ordered configurations
-            ordered_configs = summary['Configuration'].tolist()
-            
-            # Get significant pairs from post-hoc tests
-            significant_pairs = statistical_results['post_hoc']['significant_pairs']
-            
-            # Add significance bars
-            y_max = results_df['Best Fitness'].max()
-            y_range = results_df['Best Fitness'].max() - results_df['Best Fitness'].min()
-            bar_height = y_range * 0.05
-            
-            for i, (config1, config2) in enumerate(significant_pairs):
-                # Get indices in the ordered list
-                idx1 = ordered_configs.index(config1)
-                idx2 = ordered_configs.index(config2)
-                
-                # Ensure idx1 < idx2
-                if idx1 > idx2:
-                    idx1, idx2 = idx2, idx1
-                    config1, config2 = config2, config1
-                
-                # Calculate bar position
-                y_pos = y_max + bar_height * (i + 1)
-                
-                # Draw the bar
-                plt.plot([idx1, idx2], [y_pos, y_pos], 'k-', linewidth=1.5)
-                plt.plot([idx1, idx1], [y_pos - bar_height/2, y_pos], 'k-', linewidth=1.5)
-                plt.plot([idx2, idx2], [y_pos - bar_height/2, y_pos], 'k-', linewidth=1.5)
-                
-                # Add asterisk
-                plt.text((idx1 + idx2) / 2, y_pos + bar_height/4, '*', ha='center', va='center', fontsize=14)
-        else:
-            # For two-group comparison, add a single significance indicator
-            plt.title(f"Solution Quality Comparison (p = {statistical_results['p_value']:.4f}, {statistical_results['effect_interpretation']})")
-    
-    plt.title('Solution Quality Comparison with Statistical Significance')
-    plt.xlabel('Configuration')
-    plt.ylabel('Best Fitness (lower is better)')
-    plt.xticks(rotation=45)
-    plt.grid(True)
-    plt.tight_layout()
-    plt.show()
-
 # Plot with significance annotations
-plot_with_significance(results_df, statistical_results)
+if statistical_results:
+    plot_with_significance(results_df, statistical_results)
 
 # %% [markdown]
 # ## 6. Conclusion
 #
-# Based on our experiments and analysis, we can draw the following conclusions:
+# Based on our experiments and statistical analysis, we can draw the following conclusions:
 #
-# 1. **Solution Quality**: [To be filled after running experiments]
-# 2. **Computational Efficiency**: [To be filled after running experiments]
-# 3. **Convergence Behavior**: [To be filled after running experiments]
-# 4. **Statistical Significance**: [To be filled after running experiments]
+# 1. **Solution Quality**: [Fill in based on results]
+# 2. **Computational Efficiency**: [Fill in based on results]
+# 3. **Convergence Speed**: [Fill in based on results]
+# 4. **Statistical Significance**: [Fill in based on results]
 #
-# ### 6.1 Best Algorithm for the Sports League Problem
-#
-# [To be filled after running experiments]
-#
-# ### 6.2 Trade-offs and Recommendations
-#
-# [To be filled after running experiments]
-#
-# ### 6.3 Future Work
-#
-# 1. Explore more advanced hybrid approaches
-# 2. Implement adaptive parameter tuning
-# 3. Test with larger problem instances
-# 4. Develop more specialized operators for the Sports League problem
+# Overall, the [best algorithm] appears to be the most effective approach for the Sports League optimization problem, providing the best balance between solution quality and computational efficiency.
