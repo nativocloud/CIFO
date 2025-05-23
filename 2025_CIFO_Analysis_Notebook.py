@@ -593,8 +593,7 @@ def run_single_experiment(config_name, run_number, configs, players_data):
             
             # Run Genetic Algorithm
             best_solution, best_fitness, history = genetic_algorithm(
-                LeagueSolution, 
-                players_data=players_data,
+                players_data,
                 **params
             )
             
@@ -613,10 +612,8 @@ def run_single_experiment(config_name, run_number, configs, players_data):
             
             # Run Genetic Algorithm with local search
             best_solution, best_fitness, history = genetic_algorithm(
-                LeagueSolution, 
-                players_data=players_data,
-                local_search_solution_class=LeagueHillClimbingSolution, # Pass the class itself
-                local_search_params=local_search,
+                players_data,
+                local_search=local_search,
                 **params
             )
             
